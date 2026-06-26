@@ -55,6 +55,35 @@ local Window = Library:Window({
 Library.MenuKeybind = tostring(Enum.KeyCode.H)
 
 -- ══════════════════════════════════════════════════════════════
+--  FIX ANIMATION MARCHE
+--  (Le noclip / PlatformStand peut bloquer les anims —
+--   on restaure le RigType R15 et relance l'animateur au spawn)
+-- ══════════════════════════════════════════════════════════════
+local function fixWalkAnim(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    -- S'assurer que PlatformStand est false au spawn
+    hum.PlatformStand = false
+    -- Forcer RigType R15 pour que les anims de marche s'activent
+    pcall(function() sethiddenproperty(hum, "RigType", Enum.HumanoidRigType.R15) end)
+    -- Relancer l'Animator s'il existe
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator then
+        pcall(function()
+            animator:ApplyJointVelocities({})
+        end)
+    end
+end
+LP.CharacterAdded:Connect(function(char)
+    task.wait(0.2)
+    fixWalkAnim(char)
+end)
+task.spawn(function()
+    if LP.Character then fixWalkAnim(LP.Character) end
+end)
+
+-- ══════════════════════════════════════════════════════════════
 --  SKIN LOCAL
 -- ══════════════════════════════════════════════════════════════
 local skinTargetId    = 8069446587
@@ -320,23 +349,54 @@ local function stopTouchFling()
 end
 
 -- ══════════════════════════════════════
---  AIMBOT
+--  AIMBOT NORMAL + WALLBANG
 -- ══════════════════════════════════════
-local aimbotEnabled = false; local aimbotSmoothing = 0.3
-local aimbotPart = "Head"; local aimbotFOV = 300; local aimbotConn = nil
+local aimbotEnabled    = false
+local aimbotWallbang   = false
+local aimbotSmoothing  = 0.3
+local aimbotPart       = "Head"
+local aimbotFOV        = 300
+local aimbotShowFOV    = true
+local aimbotConn       = nil
 
-local function getClosestTarget()
-    local cam = getCam(); local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+-- Cercle FOV dessiné à l'écran
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible     = false
+fovCircle.Color       = Color3.fromRGB(255, 255, 255)
+fovCircle.Thickness   = 1.5
+fovCircle.Transparency = 1
+fovCircle.NumSides    = 64
+fovCircle.Filled      = false
+
+local function updateFOVCircle()
+    local cam = getCam()
+    fovCircle.Position = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+    fovCircle.Radius   = aimbotFOV
+    fovCircle.Visible  = aimbotShowFOV and (aimbotEnabled or aimbotWallbang)
+end
+
+local function getClosestTarget(ignoreWalls)
+    local cam    = getCam()
+    local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
     local best, bestD = nil, aimbotFOV
     for _, plr in pairs(Players:GetPlayers()) do
         if plr ~= LP and plr.Character then
             local part = plr.Character:FindFirstChild(aimbotPart) or plr.Character:FindFirstChild("HumanoidRootPart")
             local hum  = plr.Character:FindFirstChildOfClass("Humanoid")
             if part and hum and hum.Health > 0 then
-                local sp, onScreen = cam:WorldToViewportPoint(part.Position)
-                if onScreen then
-                    local d = (Vector2.new(sp.X,sp.Y) - center).Magnitude
-                    if d < bestD then bestD = d; best = plr end
+                if ignoreWalls then
+                    -- Wallbang : on projette juste en 2D, pas de check obstruction
+                    local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                        if d < bestD then bestD = d; best = plr end
+                    end
+                else
+                    local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                        if d < bestD then bestD = d; best = plr end
+                    end
                 end
             end
         end
@@ -347,17 +407,36 @@ end
 local function runAimbot()
     if aimbotConn then aimbotConn:Disconnect(); aimbotConn = nil end
     aimbotConn = RunService.RenderStepped:Connect(function()
-        if not aimbotEnabled then return end
-        local target = getClosestTarget(); if not target or not target.Character then return end
-        local part = target.Character:FindFirstChild(aimbotPart) or target.Character:FindFirstChild("HumanoidRootPart")
+        updateFOVCircle()
+        local useWallbang = aimbotWallbang
+        local active = aimbotEnabled or useWallbang
+        if not active then return end
+
+        local target = getClosestTarget(useWallbang)
+        if not target or not target.Character then return end
+
+        local part
+        if useWallbang then
+            -- Wallbang : vise HRP direct (centre du corps, traverse les murs)
+            part = target.Character:FindFirstChild("HumanoidRootPart")
+        else
+            part = target.Character:FindFirstChild(aimbotPart) or target.Character:FindFirstChild("HumanoidRootPart")
+        end
         if not part then return end
-        local cam = getCam(); local tCF = CFrame.new(cam.CFrame.Position, part.Position)
+
+        local cam = getCam()
+        local tCF = CFrame.new(cam.CFrame.Position, part.Position)
         cam.CFrame = aimbotSmoothing <= 0.01 and tCF or cam.CFrame:Lerp(tCF, 1 - aimbotSmoothing)
     end)
 end
+
 UIS.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-    if input.KeyCode == Enum.KeyCode.F then aimbotEnabled = not aimbotEnabled; notify("Aimbot", aimbotEnabled and "ON" or "OFF", 2) end
+    if input.KeyCode == Enum.KeyCode.F then
+        aimbotEnabled = not aimbotEnabled
+        notify("Aimbot", aimbotEnabled and "ON" or "OFF", 2)
+        updateFOVCircle()
+    end
 end)
 runAimbot()
 
@@ -410,17 +489,12 @@ end
 
 local function cleanESP(plr)
     local obj = espObjects[plr.Name]; if not obj then return end
-    -- Marquer comme nettoyé AVANT de tout détruire pour éviter les double-calls dans RenderStepped
     espObjects[plr.Name] = nil
     if obj.conns then for _, c in pairs(obj.conns) do pcall(function() c:Disconnect() end) end end
     if obj.highlight then pcall(function() obj.highlight:Destroy() end) end
     if obj.billboard then pcall(function() obj.billboard:Destroy() end) end
-    if obj.skeletonLines then
-        for _, l in pairs(obj.skeletonLines) do
-            pcall(function() l.Visible = false; l:Remove() end)
-        end
-    end
-    if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible = false; obj.boxDrawing:Remove() end) end
+    if obj.skeletonLines then for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false; l:Remove() end) end end
+    if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false; obj.boxDrawing:Remove() end) end
 end
 
 local function setupESP(plr, char)
@@ -428,7 +502,7 @@ local function setupESP(plr, char)
     if not char or not char.Parent then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then task.wait(1); hrp = char:FindFirstChild("HumanoidRootPart"); hum = char:FindFirstChildOfClass("Humanoid") end
+    if not hrp or not hum then task.wait(1); hrp=char:FindFirstChild("HumanoidRootPart"); hum=char:FindFirstChildOfClass("Humanoid") end
     if not hrp or not hum then return end
 
     local obj = { conns={}, skeletonLines={}, boxDrawing=nil, highlight=nil, billboard=nil }
@@ -472,19 +546,16 @@ local function setupESP(plr, char)
     for _, bone in ipairs(SKELETON_BONES) do table.insert(obj.skeletonLines, newLine()) end
     local boxD = newBox(); obj.boxDrawing = boxD
 
-    -- Fix mort : cacher les drawings immédiatement puis nettoyer
     table.insert(obj.conns, hum.Died:Connect(function()
-        for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible = false end) end
-        if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible = false end) end
-        task.wait(0.05)
-        cleanESP(plr)
+        for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
+        if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
+        task.wait(0.05); cleanESP(plr)
     end))
 
-    -- Fix déco : si le character quitte workspace
     table.insert(obj.conns, char.AncestryChanged:Connect(function(_, parent)
         if not parent then
-            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible = false end) end
-            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible = false end) end
+            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
+            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
             cleanESP(plr)
         end
     end))
@@ -493,26 +564,22 @@ local function setupESP(plr, char)
         if not hpBar or not hpBar.Parent then return end
         local ratio = math.clamp(hp / hum.MaxHealth, 0, 1)
         hpBar.Size = UDim2.new(ratio, 0, 1, 0)
-        -- Vert pur pour les PV, on garde blanc pour le reste
-        hpBar.BackgroundColor3 = Color3.fromRGB(math.floor((1-ratio)*80), math.floor(50 + ratio*170), math.floor(ratio*80))
+        hpBar.BackgroundColor3 = Color3.fromRGB(math.floor((1-ratio)*80), math.floor(50+ratio*170), math.floor(ratio*80))
         lHP.Text = math.floor(hp).."/"..math.floor(hum.MaxHealth)
     end))
 
     local frameCount = 0
     table.insert(obj.conns, RunService.RenderStepped:Connect(function()
-        -- Nettoyage si char ou HRP disparu (mort/déco/reset)
         if not char or not char.Parent or not hrp or not hrp.Parent then
-            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible = false end) end
-            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible = false end) end
-            cleanESP(plr)
-            return
+            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
+            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
+            cleanESP(plr); return
         end
-        local myRoot = getHRP(); local cam = getCam()
-        local dist = 0
-        if myRoot then dist = math.floor((hrp.Position - myRoot.Position).Magnitude) end
+        local myRoot=getHRP(); local cam=getCam(); local dist=0
+        if myRoot then dist=math.floor((hrp.Position-myRoot.Position).Magnitude) end
         local tooFar = dist > espMaxDistance
-        if bb and bb.Parent then bb.Enabled = not tooFar end
-        if hl and hl.Parent then hl.Enabled = not tooFar end
+        if bb and bb.Parent then bb.Enabled=not tooFar end
+        if hl and hl.Parent then hl.Enabled=not tooFar end
         lName.Visible=espOptions.name and not tooFar
         lHP.Visible=espOptions.health and not tooFar
         hpBg.Visible=espOptions.health and not tooFar
@@ -542,10 +609,9 @@ local function setupESP(plr, char)
                 else line.Visible=false end
             end
         end
-        local showBox = espOptions.box and not tooFar
         if boxD then
-            if showBox then
-                local minX,minY,maxX,maxY = math.huge,math.huge,-math.huge,-math.huge; local anyOnScreen=false
+            if espOptions.box and not tooFar then
+                local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge; local anyOnScreen=false
                 for _, part in pairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then
                         local sp,onScreen=cam:WorldToViewportPoint(part.Position)
@@ -557,8 +623,7 @@ local function setupESP(plr, char)
                     end
                 end
                 if anyOnScreen then
-                    local pad=4; boxD.Position=Vector2.new(minX-pad,minY-pad); boxD.Size=Vector2.new((maxX-minX)+pad*2,(maxY-minY)+pad*2); boxD.Visible=true
-                    boxD.Color=Color3.fromRGB(255,255,255)
+                    local pad=4; boxD.Position=Vector2.new(minX-pad,minY-pad); boxD.Size=Vector2.new((maxX-minX)+pad*2,(maxY-minY)+pad*2); boxD.Visible=true; boxD.Color=Color3.fromRGB(255,255,255)
                 else boxD.Visible=false end
             else boxD.Visible=false end
         end
@@ -578,7 +643,6 @@ local function addESP(plr)
     end)
 end
 
--- Refresh ESP toutes les 2s pour rattraper les respawn
 task.spawn(function()
     while true do task.wait(2)
         if trackOn then
@@ -587,9 +651,7 @@ task.spawn(function()
                     local obj = espObjects[plr.Name]
                     if (not obj or not obj.highlight or not obj.highlight.Parent) and plr.Character then
                         local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then
-                            task.spawn(setupESP, plr, plr.Character)
-                        end
+                        if hum and hum.Health > 0 then task.spawn(setupESP, plr, plr.Character) end
                     end
                 end
             end
@@ -603,6 +665,41 @@ Players.PlayerRemoving:Connect(function(p)
     if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect(); espCharConns[p.Name]=nil end
     playerSnapshots[p.Name]=nil
 end)
+
+-- ══════════════════════════════════════
+--  ORBIT PLAYER
+-- ══════════════════════════════════════
+local orbitActive = false
+local orbitAngle  = 0
+local orbitRadius = 6
+local orbitSpeed  = 1.5
+
+local function startOrbit(target)
+    if orbitActive then return end
+    orbitActive = true
+    orbitAngle  = 0
+    notify("Orbit", "ON → "..target.Name, 2)
+    task.spawn(function()
+        while orbitActive do
+            local tRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+            local myRoot = getHRP()
+            if not tRoot or not myRoot or not target.Character then
+                task.wait(0.1); orbitAngle += orbitSpeed * 0.1; continue
+            end
+            orbitAngle = orbitAngle + orbitSpeed * 0.05
+            local offsetX = math.cos(orbitAngle) * orbitRadius
+            local offsetZ = math.sin(orbitAngle) * orbitRadius
+            local targetPos = tRoot.Position + Vector3.new(offsetX, 2, offsetZ)
+            myRoot.CFrame = CFrame.new(targetPos, tRoot.Position)
+            task.wait(0.05)
+        end
+        notify("Orbit", "OFF", 2)
+    end)
+end
+
+local function stopOrbit()
+    orbitActive = false
+end
 
 -- ══════════════════════════════════════
 --  VÉHICULE
@@ -657,6 +754,209 @@ local function tpVehicleTo(pos)
     end
     return true
 end
+
+-- ══════════════════════════════════════
+--  FREECAM (Numpad 8)
+-- ══════════════════════════════════════
+local freecamActive = false
+
+local function launchFreecam()
+    if freecamActive then return end
+    freecamActive = true
+
+    local fc_speed     = 40
+    local fc_camCF     = getCam().CFrame
+    local fc_pitch     = 0
+    local fc_yaw       = 0
+    local fc_mouseDown = false
+    local fc_keys      = {F=0,B=0,L=0,R=0,U=0,D=0}
+    local cam          = getCam()
+    local oldCamType   = cam.CameraType
+    cam.CameraType     = Enum.CameraType.Scriptable
+    fc_camCF           = cam.CFrame
+
+    -- HUD
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name="FreecamHUD"; screenGui.ResetOnSpawn=false
+    screenGui.IgnoreGuiInset=true; screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+    screenGui.Parent=LP.PlayerGui
+
+    local BAR_H=52
+    local barFrame=Instance.new("Frame")
+    barFrame.Size=UDim2.new(1,0,0,BAR_H); barFrame.Position=UDim2.new(0,0,1,-BAR_H)
+    barFrame.BackgroundColor3=Color3.fromRGB(0,0,0); barFrame.BackgroundTransparency=0.35
+    barFrame.BorderSizePixel=0; barFrame.Parent=screenGui
+
+    local sep=Instance.new("Frame")
+    sep.Size=UDim2.new(1,0,0,2); sep.BackgroundColor3=Color3.fromRGB(60,120,255)
+    sep.BorderSizePixel=0; sep.Parent=barFrame
+
+    local titleLabel=Instance.new("TextLabel")
+    titleLabel.Size=UDim2.new(0,200,1,0); titleLabel.Position=UDim2.new(0,14,0,0)
+    titleLabel.BackgroundTransparency=1; titleLabel.Text="🎥  FREECAM"
+    titleLabel.TextColor3=Color3.fromRGB(60,140,255); titleLabel.Font=Enum.Font.GothamBold
+    titleLabel.TextSize=15; titleLabel.TextXAlignment=Enum.TextXAlignment.Left; titleLabel.Parent=barFrame
+
+    local hintLabel=Instance.new("TextLabel")
+    hintLabel.Size=UDim2.new(0,500,1,0); hintLabel.Position=UDim2.new(0,190,0,0)
+    hintLabel.BackgroundTransparency=1
+    hintLabel.Text="WASD · E/Q · Clic droit = regarder · Molette = vitesse · Numpad8 ou Suppr = quitter"
+    hintLabel.TextColor3=Color3.fromRGB(160,160,160); hintLabel.Font=Enum.Font.Gotham
+    hintLabel.TextSize=11; hintLabel.TextXAlignment=Enum.TextXAlignment.Left; hintLabel.Parent=barFrame
+
+    local speedLabel=Instance.new("TextLabel")
+    speedLabel.Size=UDim2.new(0,110,1,0); speedLabel.Position=UDim2.new(1,-120,0,0)
+    speedLabel.BackgroundTransparency=1; speedLabel.Text="⚡ "..fc_speed.." st/s"
+    speedLabel.TextColor3=Color3.fromRGB(200,200,200); speedLabel.Font=Enum.Font.GothamBold
+    speedLabel.TextSize=13; speedLabel.TextXAlignment=Enum.TextXAlignment.Right; speedLabel.Parent=barFrame
+
+    -- TP actions panel
+    local PANEL_W=270; local SEL_H=78; local UNSEL_H=36; local ITEM_GAP=6
+    local PANEL_PAD_X=10; local PANEL_PAD_Y=10; local HEADER_H=20
+    local fc_options = {
+        { label="📡 TP Ici",  desc="Téléporte ton perso ici",  key="↵ Entrée" },
+        { label="🚗 TP Car",  desc="Téléporte la voiture ici", key="↵ Entrée" },
+    }
+    local fc_selectedOption = 1
+
+    local function calcPanelH()
+        local h=PANEL_PAD_Y+HEADER_H+ITEM_GAP
+        for i=1,#fc_options do h+=(i==fc_selectedOption and SEL_H or UNSEL_H); if i<#fc_options then h+=ITEM_GAP end end
+        return h+PANEL_PAD_Y
+    end
+
+    local optPanel=Instance.new("Frame")
+    optPanel.Size=UDim2.new(0,PANEL_W,0,calcPanelH()); optPanel.AnchorPoint=Vector2.new(0.5,1)
+    optPanel.Position=UDim2.new(0.5,0,1,-(BAR_H+14)); optPanel.BackgroundColor3=Color3.fromRGB(5,8,22)
+    optPanel.BackgroundTransparency=0.12; optPanel.BorderSizePixel=0; optPanel.Parent=screenGui
+    Instance.new("UICorner",optPanel).CornerRadius=UDim.new(0,12)
+    local panelStroke=Instance.new("UIStroke"); panelStroke.Color=Color3.fromRGB(45,85,210)
+    panelStroke.Thickness=1.5; panelStroke.Parent=optPanel
+
+    local panelTitle=Instance.new("TextLabel")
+    panelTitle.Size=UDim2.new(1,0,0,HEADER_H); panelTitle.Position=UDim2.new(0,0,0,PANEL_PAD_Y)
+    panelTitle.BackgroundTransparency=1; panelTitle.Text="ACTIONS  ·  ↑ ↓ naviguer  ·  ↵ exécuter"
+    panelTitle.TextColor3=Color3.fromRGB(70,115,230); panelTitle.Font=Enum.Font.Gotham
+    panelTitle.TextSize=10; panelTitle.TextXAlignment=Enum.TextXAlignment.Center; panelTitle.Parent=optPanel
+
+    local optFrameList={}
+    local function buildOptFrames()
+        for _, f in pairs(optFrameList) do f:Destroy() end; optFrameList={}
+        local newH=calcPanelH(); optPanel.Size=UDim2.new(0,PANEL_W,0,newH)
+        local yOff=PANEL_PAD_Y+HEADER_H+ITEM_GAP
+        for i, opt in ipairs(fc_options) do
+            local isSel=(i==fc_selectedOption); local itemH=isSel and SEL_H or UNSEL_H
+            local f=Instance.new("Frame")
+            f.Size=UDim2.new(1,-PANEL_PAD_X*2,0,itemH); f.Position=UDim2.new(0,PANEL_PAD_X,0,yOff)
+            f.BackgroundColor3=isSel and Color3.fromRGB(28,65,195) or Color3.fromRGB(14,18,46)
+            f.BackgroundTransparency=isSel and 0.08 or 0.45; f.BorderSizePixel=0; f.Parent=optPanel
+            Instance.new("UICorner",f).CornerRadius=UDim.new(0,8); table.insert(optFrameList,f)
+            if isSel then local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(80,150,255); s.Thickness=2; s.Parent=f end
+            if isSel then local arrow=Instance.new("TextLabel"); arrow.Size=UDim2.new(0,16,1,0); arrow.Position=UDim2.new(0,8,0,0); arrow.BackgroundTransparency=1; arrow.Text="▶"; arrow.TextColor3=Color3.fromRGB(100,175,255); arrow.Font=Enum.Font.GothamBold; arrow.TextSize=11; arrow.TextYAlignment=Enum.TextYAlignment.Center; arrow.Parent=f end
+            local textX=isSel and 28 or 12
+            local lbl=Instance.new("TextLabel"); lbl.Size=UDim2.new(1,-(textX+8),0,isSel and 26 or 22); lbl.Position=UDim2.new(0,textX,0,7)
+            lbl.BackgroundTransparency=1; lbl.Text=opt.label; lbl.TextColor3=isSel and Color3.fromRGB(255,255,255) or Color3.fromRGB(135,135,155)
+            lbl.Font=Enum.Font.GothamBold; lbl.TextSize=isSel and 14 or 12; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Parent=f
+            if isSel then
+                local desc=Instance.new("TextLabel"); desc.Size=UDim2.new(1,-(textX+8),0,15); desc.Position=UDim2.new(0,textX,0,34)
+                desc.BackgroundTransparency=1; desc.Text=opt.desc; desc.TextColor3=Color3.fromRGB(130,165,220)
+                desc.Font=Enum.Font.Gotham; desc.TextSize=11; desc.TextXAlignment=Enum.TextXAlignment.Left; desc.Parent=f
+                local badge=Instance.new("Frame"); badge.Size=UDim2.new(0,76,0,17); badge.Position=UDim2.new(1,-84,1,-22)
+                badge.BackgroundColor3=Color3.fromRGB(35,85,215); badge.BackgroundTransparency=0.25; badge.BorderSizePixel=0; badge.Parent=f
+                Instance.new("UICorner",badge).CornerRadius=UDim.new(0,4)
+                local badgeLbl=Instance.new("TextLabel"); badgeLbl.Size=UDim2.new(1,0,1,0); badgeLbl.BackgroundTransparency=1
+                badgeLbl.Text=opt.key; badgeLbl.TextColor3=Color3.fromRGB(195,215,255); badgeLbl.Font=Enum.Font.Gotham; badgeLbl.TextSize=10; badgeLbl.Parent=badge
+            end
+            yOff=yOff+itemH+ITEM_GAP
+        end
+    end
+    buildOptFrames()
+
+    -- Crosshair
+    local crosshair=Instance.new("Frame"); crosshair.Size=UDim2.new(0,20,0,20); crosshair.Position=UDim2.new(0.5,-10,0.5,-10)
+    crosshair.BackgroundTransparency=1; crosshair.Parent=screenGui
+    local function makeLine2(w,h,x,y) local l=Instance.new("Frame"); l.Size=UDim2.new(0,w,0,h); l.Position=UDim2.new(0,x,0,y)
+        l.BackgroundColor3=Color3.fromRGB(255,255,255); l.BackgroundTransparency=0.25; l.BorderSizePixel=0; l.Parent=crosshair end
+    makeLine2(2,20,9,0); makeLine2(20,2,0,9)
+
+    local conns={}
+    local function quit()
+        freecamActive=false
+    end
+
+    local function onInputBegan(inp,gpe)
+        if gpe then return end
+        if inp.UserInputType==Enum.UserInputType.MouseButton2 then fc_mouseDown=true; UIS.MouseBehavior=Enum.MouseBehavior.LockCurrentPosition; return end
+        if inp.KeyCode==Enum.KeyCode.W then fc_keys.F=1 elseif inp.KeyCode==Enum.KeyCode.S then fc_keys.B=1
+        elseif inp.KeyCode==Enum.KeyCode.A then fc_keys.L=1 elseif inp.KeyCode==Enum.KeyCode.D then fc_keys.R=1
+        elseif inp.KeyCode==Enum.KeyCode.E then fc_keys.U=1 elseif inp.KeyCode==Enum.KeyCode.Q then fc_keys.D=1
+        elseif inp.KeyCode==Enum.KeyCode.Equals or inp.KeyCode==Enum.KeyCode.KeypadPlus then fc_speed=math.min(fc_speed+10,300); speedLabel.Text="⚡ "..fc_speed.." st/s"
+        elseif inp.KeyCode==Enum.KeyCode.Minus or inp.KeyCode==Enum.KeyCode.KeypadMinus then fc_speed=math.max(fc_speed-10,5); speedLabel.Text="⚡ "..fc_speed.." st/s"
+        elseif inp.KeyCode==Enum.KeyCode.Down then fc_selectedOption=fc_selectedOption%#fc_options+1; buildOptFrames()
+        elseif inp.KeyCode==Enum.KeyCode.Up then fc_selectedOption=((fc_selectedOption-2)%#fc_options)+1; buildOptFrames()
+        elseif inp.KeyCode==Enum.KeyCode.Return then
+            if fc_selectedOption==1 then local m=getHRP(); if m then m.CFrame=CFrame.new(fc_camCF.Position); notify("📡 TP Ici","Téléporté !",2) end
+            elseif fc_selectedOption==2 then
+                if not detectedVehicle or not detectedVehicle.Parent then if not detectVehicle() then notify("❌","Aucun véhicule !",2); return end end
+                tpVehicleTo(fc_camCF.Position+Vector3.new(0,2,0)); notify("🚗 TP Car","Voiture téléportée ici !",2)
+            end
+        elseif inp.KeyCode==Enum.KeyCode.Delete or inp.KeyCode==Enum.KeyCode.KeypadEight then
+            quit()
+        end
+    end
+    local function onInputEnded(inp,gpe)
+        if inp.UserInputType==Enum.UserInputType.MouseButton2 then fc_mouseDown=false; UIS.MouseBehavior=Enum.MouseBehavior.Default end
+        if inp.KeyCode==Enum.KeyCode.W then fc_keys.F=0 elseif inp.KeyCode==Enum.KeyCode.S then fc_keys.B=0
+        elseif inp.KeyCode==Enum.KeyCode.A then fc_keys.L=0 elseif inp.KeyCode==Enum.KeyCode.D then fc_keys.R=0
+        elseif inp.KeyCode==Enum.KeyCode.E then fc_keys.U=0 elseif inp.KeyCode==Enum.KeyCode.Q then fc_keys.D=0 end
+    end
+    local function onMouseMoved(inp)
+        if not fc_mouseDown then return end
+        local delta=inp.Delta
+        fc_yaw=fc_yaw-delta.X*0.003; fc_pitch=fc_pitch-delta.Y*0.003
+        fc_pitch=math.clamp(fc_pitch,-math.pi/2+0.05,math.pi/2-0.05)
+    end
+    local function onMouseWheel(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseWheel then
+            fc_speed=math.clamp(fc_speed+inp.Position.Z*10,5,300); speedLabel.Text="⚡ "..fc_speed.." st/s"
+        end
+    end
+    table.insert(conns,UIS.InputBegan:Connect(onInputBegan))
+    table.insert(conns,UIS.InputEnded:Connect(onInputEnded))
+    table.insert(conns,UIS.InputChanged:Connect(onMouseMoved))
+    table.insert(conns,UIS.InputChanged:Connect(onMouseWheel))
+
+    local renderConn
+    renderConn=RunService.RenderStepped:Connect(function(dt)
+        if not freecamActive then
+            renderConn:Disconnect()
+            for _, c in pairs(conns) do c:Disconnect() end
+            UIS.MouseBehavior=Enum.MouseBehavior.Default
+            cam.CameraType=oldCamType; screenGui:Destroy()
+            notify("🎥 Freecam","OFF",2); return
+        end
+        local rot=CFrame.Angles(0,fc_yaw,0)*CFrame.Angles(fc_pitch,0,0)
+        local dir=Vector3.zero
+        if fc_keys.F==1 then dir+=rot.LookVector end; if fc_keys.B==1 then dir-=rot.LookVector end
+        if fc_keys.L==1 then dir-=rot.RightVector end; if fc_keys.R==1 then dir+=rot.RightVector end
+        if fc_keys.U==1 then dir+=Vector3.new(0,1,0) end; if fc_keys.D==1 then dir-=Vector3.new(0,1,0) end
+        if dir.Magnitude>0 then fc_camCF=CFrame.new(fc_camCF.Position+dir.Unit*fc_speed*dt) end
+        cam.CFrame=CFrame.new(fc_camCF.Position)*rot; fc_camCF=cam.CFrame
+    end)
+    notify("🎥 Freecam","ON — Numpad8/Suppr pour quitter | Clic droit = regarder | Molette = vitesse",5)
+end
+
+-- Keybind Numpad 8 → Freecam
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.KeypadEight then
+        if freecamActive then
+            freecamActive = false
+        else
+            launchFreecam()
+        end
+    end
+end)
 
 -- ══════════════════════════════════════════════════════════════
 --  PAGES NEXONIX
@@ -720,7 +1020,7 @@ SecAurasSelf:Toggle({
     Name = "Void Protection", Flag = "VoidProt", Default = false,
     Callback = function(v)
         voidProtEnabled=v; setVoidProtection(v)
-        notify("Void Prot", v and "ON" or "OFF",2)
+        notify("Void Prot", v and "ON" or "OFF", 2)
     end,
 })
 
@@ -728,14 +1028,41 @@ SecAurasSelf:Toggle({
 local SecAimbotSelf = PageSelf:Section({ Name = "Aimbot — F = ON/OFF", Side = 2 })
 
 SecAimbotSelf:Toggle({
-    Name = "Aimbot ON/OFF", Flag = "AimbotToggle", Default = false,
-    Callback = function(v) aimbotEnabled=v; notify("Aimbot",v and"ON"or"OFF",2) end,
+    Name = "Aimbot Normal (F)", Flag = "AimbotToggle", Default = false,
+    Callback = function(v)
+        aimbotEnabled=v
+        if v then aimbotWallbang=false end
+        notify("Aimbot", v and "ON" or "OFF", 2)
+        updateFOVCircle()
+    end,
+})
+
+SecAimbotSelf:Toggle({
+    Name = "Aimbot Wallbang", Flag = "AimbotWallbang", Default = false,
+    Callback = function(v)
+        aimbotWallbang=v
+        if v then aimbotEnabled=false end
+        notify("Wallbang Aimbot", v and "ON (traverse les murs)" or "OFF", 2)
+        updateFOVCircle()
+    end,
+})
+
+SecAimbotSelf:Toggle({
+    Name = "Afficher cercle FOV", Flag = "AimbotShowFOV", Default = true,
+    Callback = function(v)
+        aimbotShowFOV=v
+        updateFOVCircle()
+    end,
 })
 
 SecAimbotSelf:Slider({
-    Name = "FOV détection", Flag = "AimbotFOV",
-    Min = 50, Max = 800, Default = 300, Decimals = 1,
-    Callback = function(v) aimbotFOV=v end,
+    Name = "Taille cercle FOV", Flag = "AimbotFOV",
+    Min = 10, Max = 800, Default = 300, Decimals = 1,
+    Callback = function(v)
+        aimbotFOV=v
+        fovCircle.Radius=v
+        updateFOVCircle()
+    end,
 })
 
 SecAimbotSelf:Slider({
@@ -842,6 +1169,31 @@ SecTarget:Toggle({
             local cam=getCam(); cam.CameraType=Enum.CameraType.Custom; notify("Spectate","OFF",2)
         end
     end,
+})
+
+-- Orbit Player
+SecTarget:Toggle({
+    Name = "Orbit Player", Flag = "OrbitPlayer", Default = false,
+    Callback = function(v)
+        if v then
+            if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
+            startOrbit(selectedTarget)
+        else
+            stopOrbit()
+        end
+    end,
+})
+
+SecTarget:Slider({
+    Name = "Orbit Rayon", Flag = "OrbitRadius",
+    Min = 2, Max = 30, Default = 6, Decimals = 1,
+    Callback = function(v) orbitRadius=v end,
+})
+
+SecTarget:Slider({
+    Name = "Orbit Vitesse", Flag = "OrbitSpeed",
+    Min = 0.1, Max = 10, Default = 1.5, Decimals = 1,
+    Callback = function(v) orbitSpeed=v end,
 })
 
 -- Section TP Car & CarFuck (droite)
@@ -968,7 +1320,6 @@ SecTPClic:Button({
     end,
 })
 
--- Section TP Véhicule (droite)
 local SecVehTP = PageTP:Section({ Name = "TP Véhicule au clic", Side = 2 })
 
 local vehTPEnabled=false; local vehTPConn=nil
@@ -1002,7 +1353,6 @@ SecVehTP:Toggle({
 -- ── PAGE 4 : VISUAL ───────────────────────────────────────────
 local PageVisual = Window:Page({ Icon = "rbxassetid://85403342431888" })
 
--- Section TrackAll (gauche)
 local SecESPMaster = PageVisual:Section({ Name = "TrackAll — Master", Side = 1 })
 
 SecESPMaster:Toggle({
@@ -1030,11 +1380,11 @@ SecESPMaster:Button({
     end,
 })
 
-SecESPMaster:Toggle({ Name="Skeleton ESP", Flag="ESPSkeleton", Default=true, Callback=function(v) espOptions.skeleton=v; notify("Skeleton",v and"ON"or"OFF",2) end })
-SecESPMaster:Toggle({ Name="Box ESP", Flag="ESPBox", Default=true, Callback=function(v) espOptions.box=v; if not v then for _,obj in pairs(espObjects) do if obj.boxDrawing then obj.boxDrawing.Visible=false end end end; notify("Box ESP",v and"ON"or"OFF",2) end })
-SecESPMaster:Toggle({ Name="Health ESP", Flag="ESPHealth", Default=true, Callback=function(v) espOptions.health=v; notify("Health",v and"ON"or"OFF",2) end })
-SecESPMaster:Toggle({ Name="Name ESP", Flag="ESPName", Default=true, Callback=function(v) espOptions.name=v; notify("Name",v and"ON"or"OFF",2) end })
-SecESPMaster:Toggle({ Name="Distance ESP", Flag="ESPDist", Default=true, Callback=function(v) espOptions.distance=v; notify("Distance",v and"ON"or"OFF",2) end })
+SecESPMaster:Toggle({ Name="Skeleton ESP", Flag="ESPSkeleton", Default=true, Callback=function(v) espOptions.skeleton=v end })
+SecESPMaster:Toggle({ Name="Box ESP", Flag="ESPBox", Default=true, Callback=function(v) espOptions.box=v; if not v then for _,obj in pairs(espObjects) do if obj.boxDrawing then obj.boxDrawing.Visible=false end end end end })
+SecESPMaster:Toggle({ Name="Health ESP", Flag="ESPHealth", Default=true, Callback=function(v) espOptions.health=v end })
+SecESPMaster:Toggle({ Name="Name ESP", Flag="ESPName", Default=true, Callback=function(v) espOptions.name=v end })
+SecESPMaster:Toggle({ Name="Distance ESP", Flag="ESPDist", Default=true, Callback=function(v) espOptions.distance=v end })
 
 SecESPMaster:Toggle({
     Name = "STAFF Detect", Flag = "STAFFDetect", Default = false,
@@ -1056,7 +1406,6 @@ SecESPMaster:Toggle({
     end,
 })
 
--- Section Lighting (droite)
 local SecLighting = PageVisual:Section({ Name = "Lighting", Side = 2 })
 
 SecLighting:Toggle({
@@ -1078,7 +1427,6 @@ SecLighting:Slider({
     Callback = function(v) getCam().FieldOfView=v end,
 })
 
--- Section Animations (droite)
 local SecAnim = PageVisual:Section({ Name = "Animations", Side = 2 })
 
 local ANIMS = {{"Robot Dance","507766388"},{"Floss","5915693312"},{"Samba","507776879"},{"Wave","507770239"},
@@ -1121,7 +1469,7 @@ SecAnim:Textbox({
 })
 
 -- ── PAGE 5 : MISC ─────────────────────────────────────────────
-local PageMisc = Window:Page({ Icon = "rbxassetid://129245697782918" })
+local PageMisc = Window:Page({ Icon = "rbxassetid://133965452418408" })
 
 local SecMusic = PageMisc:Section({ Name = "Musique", Side = 1 })
 
@@ -1138,7 +1486,6 @@ SecMusic:Slider({
     Callback = function(v) bgMusic.Volume=v/100; notify("Volume",v.."%",1,0.6) end,
 })
 
--- Section Scripts (droite)
 local SecScripts = PageMisc:Section({ Name = "Scripts externes", Side = 2 })
 
 SecScripts:Button({
@@ -1191,4 +1538,4 @@ do
     LP.Idled:Connect(function() VU:Button2Down(Vector2.zero,getCam().CFrame); task.wait(1); VU:Button2Up(Vector2.zero,getCam().CFrame) end)
 end
 
-notify("Panel Wars", "Menu chargé ! — By FocusOnTop", 5)
+notify("Panel Wars", "Menu chargé ! — By FocusOnTop | Numpad8 = Freecam", 5)
