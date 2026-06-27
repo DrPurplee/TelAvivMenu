@@ -59,27 +59,46 @@ Library.MenuKeybind = tostring(Enum.KeyCode.H)
 --  (Le noclip / PlatformStand peut bloquer les anims —
 --   on restaure le RigType R15 et relance l'animateur au spawn)
 -- ══════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════
+--  FIX ANIMATIONS DE MARCHE
+--  Cause réelle : le skin applique ApplyDescription qui reset parfois
+--  les anims. On recharge le AnimateScript Roblox natif proprement.
+-- ══════════════════════════════════════
 local function fixWalkAnim(char)
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    -- S'assurer que PlatformStand est false au spawn
     hum.PlatformStand = false
-    -- Forcer RigType R15 pour que les anims de marche s'activent
-    pcall(function() sethiddenproperty(hum, "RigType", Enum.HumanoidRigType.R15) end)
-    -- Relancer l'Animator s'il existe
-    local animator = hum:FindFirstChildOfClass("Animator")
-    if animator then
-        pcall(function()
-            animator:ApplyJointVelocities({})
+    -- On ne touche PAS au RigType ici pour ne pas casser les anims
+    -- On recharge le script Animate natif si absent ou cassé
+    local animate = char:FindFirstChild("Animate")
+    if not animate then
+        -- Cloner le script Animate depuis le LocalPlayer (Roblox le fournit)
+        local ok, animScript = pcall(function()
+            return game:GetService("ReplicatedFirst"):FindFirstChild("RbxCharacterSounds")
         end)
+        -- Fallback : on recharge via un loadanimation neutre
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if animator then
+            -- Arrêter toutes les pistes orphelines
+            for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+                pcall(function() track:Stop(0) end)
+            end
+        end
+    else
+        -- Désactiver/réactiver le script Animate pour le relancer proprement
+        animate.Disabled = true
+        task.wait(0.05)
+        animate.Disabled = false
     end
 end
+
 LP.CharacterAdded:Connect(function(char)
-    task.wait(0.2)
+    task.wait(0.5) -- laisser le skin s'appliquer d'abord
     fixWalkAnim(char)
 end)
 task.spawn(function()
+    task.wait(0.5)
     if LP.Character then fixWalkAnim(LP.Character) end
 end)
 
@@ -208,63 +227,145 @@ end)
 -- ══════════════════════════════════════
 --  FLY
 -- ══════════════════════════════════════
-local FLYING = false; local flySpeed = 80; local realWalkSpeed = 16
-local flyKeyDown = nil; local flyKeyUp = nil
-local CTRL = {F=0,B=0,L=0,R=0,U=0,D=0}
+-- ══════════════════════════════════════
+--  FLY FURTIF (CFrame-based, comme l'orbit)
+--  Pas de BodyVelocity/PlatformStand → indétectable côté serveur
+--  Le perso "marche dans l'air" visuellement, naturel
+-- ══════════════════════════════════════
+-- ══════════════════════════════════════
+--  FLY FURTIF + FLUIDE
+--  Principe : CFrame pur chaque Heartbeat (pas de BodyVelocity)
+--  Inertie réelle : vitesse cumulée, stop net quand on lâche
+--  Direction = caméra, le perso pivote vers où il va
+-- ══════════════════════════════════════
+local FLYING        = false
+local flySpeed      = 80
+local realWalkSpeed = 16
+local flyKeyDown    = nil
+local flyKeyUp      = nil
+local flyConn       = nil
+
+-- Touches pressées (booléens, pas 0/1 pour être précis)
+local flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
+
+-- Vitesse actuelle du fly (accumulée frame à frame)
+local flyVel = Vector3.zero
+
+-- Constantes de réponse
+local FLY_ACCEL    = 18   -- accélération (plus haut = réponse plus directe)
+local FLY_DECEL    = 20   -- décélération quand on lâche (plus haut = stop plus net)
+local FLY_DEADZONE = 0.05 -- seuil en dessous duquel on considère vitesse = 0
 
 local function NOFLY()
     FLYING = false
+    flyVel = Vector3.zero
     if flyKeyDown then flyKeyDown:Disconnect(); flyKeyDown = nil end
     if flyKeyUp   then flyKeyUp:Disconnect();   flyKeyUp   = nil end
+    if flyConn    then flyConn:Disconnect();    flyConn    = nil end
+    flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
     local hum = getHum()
-    if hum then hum.PlatformStand = false; hum.WalkSpeed = realWalkSpeed end
-    local char = getChar()
-    if char then for _, p in pairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = true end end end
+    if hum then hum.WalkSpeed = realWalkSpeed end
     notify("Fly", "OFF", 2)
 end
 
 local function sFLY()
-    if FLYING then NOFLY() end
-    local hrp = getHRP(); if not hrp then notify("Fly", "Personnage introuvable !", 2) return end
-    FLYING = true; CTRL = {F=0,B=0,L=0,R=0,U=0,D=0}
-    local BG = Instance.new("BodyGyro"); BG.P = 9e4; BG.MaxTorque = Vector3.new(9e9,9e9,9e9); BG.CFrame = hrp.CFrame; BG.Parent = hrp
-    local BV = Instance.new("BodyVelocity"); BV.Velocity = Vector3.zero; BV.MaxForce = Vector3.new(9e9,9e9,9e9); BV.Parent = hrp
-    task.spawn(function()
-        repeat task.wait()
-            local cam = workspace.CurrentCamera; local hum = getHum()
-            if hum then hum.PlatformStand = true; if hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end end
-            local char = getChar()
-            if char then for _, p in pairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
-            local dir = Vector3.zero
-            if CTRL.F ~= 0 then dir += cam.CFrame.LookVector  end; if CTRL.B ~= 0 then dir -= cam.CFrame.LookVector  end
-            if CTRL.L ~= 0 then dir -= cam.CFrame.RightVector end; if CTRL.R ~= 0 then dir += cam.CFrame.RightVector end
-            if CTRL.U ~= 0 then dir += Vector3.new(0,1,0) end;     if CTRL.D ~= 0 then dir -= Vector3.new(0,1,0) end
-            BV.Velocity = dir.Magnitude > 0 and dir.Unit * flySpeed or Vector3.zero; BG.CFrame = cam.CFrame
-        until not FLYING
-        CTRL = {F=0,B=0,L=0,R=0,U=0,D=0}
-        pcall(function() BG:Destroy() end); pcall(function() BV:Destroy() end)
-        local hum2 = getHum(); if hum2 then hum2.PlatformStand = false; hum2.WalkSpeed = realWalkSpeed end
-    end)
-    flyKeyDown = UIS.InputBegan:Connect(function(i,g)
+    if FLYING then NOFLY(); return end
+    local hrp = getHRP()
+    if not hrp then notify("Fly", "Personnage introuvable !", 2) return end
+
+    FLYING = true
+    flyVel = Vector3.zero
+    flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
+
+    -- ── Touches ──────────────────────────────────────
+    flyKeyDown = UIS.InputBegan:Connect(function(i, g)
         if g then return end
-        if i.KeyCode==Enum.KeyCode.W then CTRL.F=1 elseif i.KeyCode==Enum.KeyCode.S then CTRL.B=1
-        elseif i.KeyCode==Enum.KeyCode.A then CTRL.L=1 elseif i.KeyCode==Enum.KeyCode.D then CTRL.R=1
-        elseif i.KeyCode==Enum.KeyCode.E then CTRL.U=1 elseif i.KeyCode==Enum.KeyCode.Q then CTRL.D=1 end
+        local k = i.KeyCode
+        if k == Enum.KeyCode.W then flyKeys.F = true
+        elseif k == Enum.KeyCode.S then flyKeys.B = true
+        elseif k == Enum.KeyCode.A then flyKeys.L = true
+        elseif k == Enum.KeyCode.D then flyKeys.R = true
+        elseif k == Enum.KeyCode.E then flyKeys.U = true
+        elseif k == Enum.KeyCode.Q then flyKeys.D = true
+        end
     end)
-    flyKeyUp = UIS.InputEnded:Connect(function(i,g)
+
+    flyKeyUp = UIS.InputEnded:Connect(function(i, g)
         if g then return end
-        if i.KeyCode==Enum.KeyCode.W then CTRL.F=0 elseif i.KeyCode==Enum.KeyCode.S then CTRL.B=0
-        elseif i.KeyCode==Enum.KeyCode.A then CTRL.L=0 elseif i.KeyCode==Enum.KeyCode.D then CTRL.R=0
-        elseif i.KeyCode==Enum.KeyCode.E then CTRL.U=0 elseif i.KeyCode==Enum.KeyCode.Q then CTRL.D=0 end
+        local k = i.KeyCode
+        if k == Enum.KeyCode.W then flyKeys.F = false
+        elseif k == Enum.KeyCode.S then flyKeys.B = false
+        elseif k == Enum.KeyCode.A then flyKeys.L = false
+        elseif k == Enum.KeyCode.D then flyKeys.R = false
+        elseif k == Enum.KeyCode.E then flyKeys.U = false
+        elseif k == Enum.KeyCode.Q then flyKeys.D = false
+        end
     end)
-    notify("Fly", "ON — WASD | E monter | Q descendre | Vitesse : "..flySpeed, 3)
+
+    -- ── Boucle de vol ────────────────────────────────
+    -- Exactement comme la freecam : LookVector COMPLET de la caméra
+    -- → regarder en l'air + avancer = monter, regarder en bas = descendre
+    -- E/Q = monter/descendre pur (override vertical)
+    -- Quand on lâche tout : stop net immédiat
+    flyConn = RunService.Heartbeat:Connect(function(dt)
+        if not FLYING then return end
+        local hrp2 = getHRP(); if not hrp2 then return end
+        local cam  = getCam()
+        local camCF = cam.CFrame
+
+        -- Direction complète caméra (comme freecam, pas d'aplatissement)
+        local wishDir = Vector3.zero
+        if flyKeys.F then wishDir = wishDir + camCF.LookVector  end
+        if flyKeys.B then wishDir = wishDir - camCF.LookVector  end
+        if flyKeys.L then wishDir = wishDir - camCF.RightVector end
+        if flyKeys.R then wishDir = wishDir + camCF.RightVector end
+        -- E/Q = vertical pur (indépendant de la caméra)
+        if flyKeys.U then wishDir = wishDir + Vector3.new(0, 1, 0) end
+        if flyKeys.D then wishDir = wishDir - Vector3.new(0, 1, 0) end
+
+        local anyKey = flyKeys.F or flyKeys.B or flyKeys.L or flyKeys.R or flyKeys.U or flyKeys.D
+
+        if anyKey and wishDir.Magnitude > 0 then
+            local targetVel = wishDir.Unit * flySpeed
+            flyVel = flyVel:Lerp(targetVel, math.min(1, FLY_ACCEL * dt))
+        else
+            -- Stop net et rapide dès qu'on lâche
+            flyVel = flyVel:Lerp(Vector3.zero, math.min(1, FLY_DECEL * dt))
+            if flyVel.Magnitude < FLY_DEADZONE then
+                flyVel = Vector3.zero
+            end
+        end
+
+        if flyVel.Magnitude > FLY_DEADZONE then
+            local newPos = hrp2.Position + flyVel * dt
+
+            -- Rotation HRP : suit la direction horizontale du mouvement
+            -- (le perso se tourne vers où il va, sans s'incliner vers le haut/bas)
+            local flatVel = Vector3.new(flyVel.X, 0, flyVel.Z)
+            if flatVel.Magnitude > 0.5 then
+                local goalRot  = CFrame.lookAt(newPos, newPos + flatVel)
+                local currYaw  = CFrame.new(newPos, newPos + Vector3.new(
+                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001
+                ))
+                hrp2.CFrame = currYaw:Lerp(goalRot, math.min(1, 10 * dt))
+            else
+                hrp2.CFrame = CFrame.new(newPos, newPos + Vector3.new(
+                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001
+                ))
+            end
+        end
+    end)
+
+    notify("Fly", "ON — WASD + E/Q | LeftCtrl = stop/reprendre | Vitesse : " .. flySpeed, 3)
 end
 
 UIS.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-    if input.KeyCode == Enum.KeyCode.LeftControl then if FLYING then NOFLY() else sFLY() end end
+    if input.KeyCode == Enum.KeyCode.LeftControl then sFLY() end
 end)
-LP.CharacterAdded:Connect(function() NOFLY() end)
+LP.CharacterAdded:Connect(function()
+    if FLYING then NOFLY() end
+end)
 
 -- ══════════════════════════════════════
 --  PUSH / FLING
@@ -358,6 +459,44 @@ local aimbotPart       = "Head"
 local aimbotFOV        = 300
 local aimbotShowFOV    = true
 local aimbotConn       = nil
+local wallbangFireConn = nil  -- boucle de tir wallbang
+
+-- Lance la boucle de tir wallbang : tire via DamageEvent toutes les X secondes
+local wallbangDamage   = 15
+local wallbangRate     = 0.3 -- secondes entre chaque tir
+
+local function startWallbangFire()
+    if wallbangFireConn then return end
+    wallbangFireConn = task.spawn(function()
+        while aimbotWallbang do
+            local target = getClosestTarget(true)
+            if target and target.Character then
+                -- Essaie via DamageEvent (Panel Wars)
+                pcall(function()
+                    local remote = game:GetService("ReplicatedStorage")
+                        :WaitForChild("Locker",1):WaitForChild("Civil",1)
+                        :WaitForChild("Bat",1):WaitForChild("ExtraScripts",1)
+                        :WaitForChild("DamageEvent",1)
+                    if remote then
+                        remote:FireServer(target.Character, wallbangDamage)
+                    end
+                end)
+                -- Fallback : appliquer les dégâts localement si Remote absent
+                pcall(function()
+                    local hum = target.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then hum:TakeDamage(wallbangDamage) end
+                end)
+            end
+            task.wait(wallbangRate)
+        end
+        wallbangFireConn = nil
+    end)
+end
+
+local function stopWallbangFire()
+    aimbotWallbang = false
+    -- wallbangFireConn se stoppe seul via le while aimbotWallbang
+end
 
 -- Cercle FOV dessiné à l'écran
 local fovCircle = Drawing.new("Circle")
@@ -659,7 +798,23 @@ task.spawn(function()
     end
 end)
 
-Players.PlayerAdded:Connect(function(p) task.wait(1); if trackOn then addESP(p) end end)
+-- ESP PlayerAdded : on abonne TOUJOURS le CharacterAdded,
+-- et on lance l'ESP si trackOn est actif au moment où le perso spawn
+Players.PlayerAdded:Connect(function(p)
+    if p == LP then return end
+    -- Abonnement CharacterAdded immédiat (peu importe si trackOn est actif)
+    if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect() end
+    espCharConns[p.Name] = p.CharacterAdded:Connect(function(char)
+        task.wait(0.5) -- laisser le char se construire
+        if trackOn then task.spawn(setupESP, p, char) end
+    end)
+    -- Si le joueur a déjà un perso (rare mais possible)
+    if trackOn and p.Character then
+        task.wait(1)
+        task.spawn(setupESP, p, p.Character)
+    end
+end)
+
 Players.PlayerRemoving:Connect(function(p)
     cleanESP(p)
     if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect(); espCharConns[p.Name]=nil end
@@ -1005,6 +1160,106 @@ SecSelf:Toggle({
     end,
 })
 
+local invisActive = false
+local invisConns  = {}
+
+-- Sauvegarde des transparences originales pour restaurer proprement
+local invisOriginalTransp = {}
+
+local function applyInvis(char, bool)
+    if not char then return end
+    for _, p in pairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            if p.Name == "HumanoidRootPart" then
+                -- HRP toujours invisible visuellement (déjà transparent normalement)
+                p.Transparency = 1
+            else
+                if bool then
+                    -- Sauvegarder la transparence originale
+                    invisOriginalTransp[p] = p.Transparency
+                    -- Transparency côté SERVEUR (visible par tous)
+                    p.Transparency = 1
+                else
+                    -- Restaurer la transparence originale
+                    p.Transparency = invisOriginalTransp[p] or 0
+                end
+            end
+        elseif p:IsA("Decal") then
+            if bool then
+                invisOriginalTransp[p] = p.Transparency
+                p.Transparency = 1
+            else
+                p.Transparency = invisOriginalTransp[p] or 0
+            end
+        end
+    end
+    -- Accessoires / chapeaux
+    for _, acc in pairs(char:GetChildren()) do
+        if acc:IsA("Accessory") or acc:IsA("Hat") then
+            local handle = acc:FindFirstChild("Handle")
+            if handle then
+                if bool then
+                    invisOriginalTransp[handle] = handle.Transparency
+                    handle.Transparency = 1
+                    -- Cacher aussi les Weld pour éviter des glitchs visuels
+                    for _, d in pairs(handle:GetDescendants()) do
+                        if d:IsA("BasePart") then
+                            invisOriginalTransp[d] = d.Transparency
+                            d.Transparency = 1
+                        end
+                    end
+                else
+                    handle.Transparency = invisOriginalTransp[handle] or 0
+                    for _, d in pairs(handle:GetDescendants()) do
+                        if d:IsA("BasePart") then
+                            d.Transparency = invisOriginalTransp[d] or 0
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function setInvisible(bool)
+    for _, c in pairs(invisConns) do pcall(function() c:Disconnect() end) end
+    invisConns = {}
+    if not bool then invisOriginalTransp = {} end
+
+    local char = getChar()
+    if char then applyInvis(char, bool) end
+
+    -- Reappliquer à chaque respawn
+    table.insert(invisConns, LP.CharacterAdded:Connect(function(c)
+        task.wait(0.8) -- laisser le char + skin se construire complètement
+        if invisActive then applyInvis(c, true) end
+    end))
+
+    -- Maintenir en continu : si un script du jeu reset la Transparency
+    if bool then
+        table.insert(invisConns, RunService.Heartbeat:Connect(function()
+            local c = getChar()
+            if not c or not invisActive then return end
+            for _, p in pairs(c:GetDescendants()) do
+                if p:IsA("BasePart") and p.Transparency ~= 1 then
+                    p.Transparency = 1
+                elseif p:IsA("Decal") and p.Transparency ~= 1 then
+                    p.Transparency = 1
+                end
+            end
+        end))
+    end
+end
+
+SecSelf:Toggle({
+    Name = "Invisible (local)", Flag = "Invisible", Default = false,
+    Callback = function(v)
+        invisActive = v
+        setInvisible(v)
+        notify("Invisible", v and "ON — perso transparent localement" or "OFF", 2)
+    end,
+})
+
 -- Section Auras (droite)
 local SecAurasSelf = PageSelf:Section({ Name = "Auras", Side = 2 })
 
@@ -1041,10 +1296,27 @@ SecAimbotSelf:Toggle({
     Name = "Aimbot Wallbang", Flag = "AimbotWallbang", Default = false,
     Callback = function(v)
         aimbotWallbang=v
-        if v then aimbotEnabled=false end
-        notify("Wallbang Aimbot", v and "ON (traverse les murs)" or "OFF", 2)
+        if v then
+            aimbotEnabled=false
+            startWallbangFire()
+        else
+            stopWallbangFire()
+        end
+        notify("Wallbang Aimbot", v and "ON — tire a travers les murs !" or "OFF", 2)
         updateFOVCircle()
     end,
+})
+
+SecAimbotSelf:Slider({
+    Name = "Wallbang Degats/tir", Flag = "WallbangDmg",
+    Min = 1, Max = 100, Default = 15, Decimals = 1,
+    Callback = function(v) wallbangDamage=v end,
+})
+
+SecAimbotSelf:Slider({
+    Name = "Wallbang Cadence (s)", Flag = "WallbangRate",
+    Min = 0.05, Max = 2, Default = 0.3, Decimals = 2,
+    Callback = function(v) wallbangRate=v end,
 })
 
 SecAimbotSelf:Toggle({
@@ -1066,7 +1338,7 @@ SecAimbotSelf:Slider({
 })
 
 SecAimbotSelf:Slider({
-    Name = "Smoothing (0=snap 90=fluide)", Flag = "AimbotSmooth",
+    Name = "Smoothing", Flag = "AimbotSmooth",
     Min = 0, Max = 90, Default = 30, Decimals = 1,
     Callback = function(v) aimbotSmoothing=v/100 end,
 })
