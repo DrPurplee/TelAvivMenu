@@ -311,6 +311,44 @@ local flyKeyUp      = nil
 local flyConn       = nil
 local flyJumpConn   = nil
 
+local savedJumpPower = nil
+local savedJumpHeight = nil
+local savedUseJumpPower = nil
+
+local function disableJumpForFly()
+    local hum = getHum()
+    if not hum then return end
+
+    savedUseJumpPower = hum.UseJumpPower
+    savedJumpPower = hum.JumpPower
+    savedJumpHeight = hum.JumpHeight
+
+    hum.UseJumpPower = true
+    hum.JumpPower = 0
+    hum.JumpHeight = 0
+end
+
+local function restoreJumpAfterFly()
+    local hum = getHum()
+    if not hum then return end
+
+    if savedUseJumpPower ~= nil then
+        hum.UseJumpPower = savedUseJumpPower
+    end
+
+    if savedJumpPower ~= nil then
+        hum.JumpPower = savedJumpPower
+    end
+
+    if savedJumpHeight ~= nil then
+        hum.JumpHeight = savedJumpHeight
+    end
+
+    savedUseJumpPower = nil
+    savedJumpPower = nil
+    savedJumpHeight = nil
+end
+
 local flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
 local flyVel = Vector3.zero
 
@@ -327,8 +365,11 @@ local function NOFLY()
     if flyJumpConn then flyJumpConn:Disconnect(); flyJumpConn = nil end
     flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
     local hum = getHum()
-    if hum then hum.WalkSpeed = realWalkSpeed end
-    notify("Fly", "OFF", 2)
+if hum then hum.WalkSpeed = realWalkSpeed end
+
+restoreJumpAfterFly()
+
+notify("Fly", "OFF", 2)
 end
 
 local function sFLY()
@@ -337,8 +378,10 @@ local function sFLY()
     if not hrp then notify("Fly", "Personnage introuvable !", 2) return end
 
     FLYING = true
-    flyVel = Vector3.zero
-    flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
+disableJumpForFly()
+
+flyVel = Vector3.zero
+flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
 
     -- Infinite Jump dédié au fly
     flyJumpConn = RunService.Heartbeat:Connect(function()
@@ -1821,28 +1864,10 @@ SecScripts:Button({
 })
 
 SecScripts:Button({
-    Name = "Anti blacklist (re-exec)",
+    Name = "DEX Explorer",
     Callback = function()
-        pcall(function()
-            local old
-            old=hookmetamethod(game,"__namecall",function(self,...)
-                local method=getnamecallmethod(); local args={...}
-                if method=="InvokeServer" then
-                    local blockedTexts={"added blacklisted","Anticheat","SF Treason","banni",""}
-                    for _, v in ipairs(args) do
-                        if typeof(v)=="string" then
-                            local lower=v:lower()
-                            for _, word in ipairs(blockedTexts) do
-                                if string.find(lower,word) then warn("Blocked call:",v); return nil end
-                            end
-                        end
-                    end
-                    return old(self,unpack(args))
-                end
-                return old(self,...)
-            end)
-        end)
-        notify("Scripts","Anti-Blacklist re-exécuté !",2)
+          loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-dex-explorer-fixed-for-velocity-236826"))()
+        notify("Scripts","DEX executé !",2)
     end,
 })
 
