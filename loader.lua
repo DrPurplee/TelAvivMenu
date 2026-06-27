@@ -55,6 +55,25 @@ local Window = Library:Window({
 Library.MenuKeybind = tostring(Enum.KeyCode.H)
 
 -- ══════════════════════════════════════
+--  LOGO EN BAS À GAUCHE
+-- ══════════════════════════════════════
+local logoGui = Instance.new("ScreenGui")
+logoGui.Name = "BottomLeftLogo"
+logoGui.ResetOnSpawn = false
+logoGui.IgnoreGuiInset = true
+logoGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+logoGui.Parent = LP:WaitForChild("PlayerGui")
+
+local logo = Instance.new("ImageLabel")
+logo.Name = "Logo"
+logo.BackgroundTransparency = 1 -- pas de fond
+logo.Image = "rbxassetid://124884194374035"
+logo.Size = UDim2.new(0, 320, 0, 320)
+logo.Position = UDim2.new(0, 15, 1, -210)
+logo.ScaleType = Enum.ScaleType.Fit
+logo.Parent = logoGui
+
+-- ══════════════════════════════════════
 --  FIX ANIMATIONS DE MARCHE
 -- ══════════════════════════════════════
 local function fixWalkAnim(char)
@@ -209,27 +228,18 @@ LP.CharacterAdded:Connect(function(char)
 end)
 
 -- ══════════════════════════════════════
---  WALKSPEED FURTIF (CFrame-based, comme l'orbit)
---  Principe : on déplace le HRP manuellement via CFrame chaque Heartbeat
---  au lieu de toucher hum.WalkSpeed → indétectable côté serveur
---  Le perso suit la direction caméra horizontale, animation naturelle
+--  WALKSPEED FURTIF
 -- ══════════════════════════════════════
 local stealthSpeedEnabled = false
-local stealthSpeedValue   = 16   -- valeur par défaut (même que walkspeed normal)
+local stealthSpeedValue   = 16
 local stealthSpeedConn    = nil
 local stealthKeys         = { F=false, B=false, L=false, R=false }
 
 local function startStealthSpeed()
     if stealthSpeedConn then stealthSpeedConn:Disconnect(); stealthSpeedConn = nil end
-
-    -- On met le WalkSpeed réel à 0 pour que Roblox ne bouge pas le perso tout seul
-    -- et on gère 100% du mouvement au sol via CFrame
     local hum = getHum()
-    if hum then
-        hum.WalkSpeed = 0
-    end
+    if hum then hum.WalkSpeed = 0 end
 
-    -- Écoute des touches WASD
     local keyDownConn = UIS.InputBegan:Connect(function(i, g)
         if g then return end
         local k = i.KeyCode
@@ -256,7 +266,6 @@ local function startStealthSpeed()
             stealthSpeedConn:Disconnect()
             stealthSpeedConn = nil
             stealthKeys = { F=false, B=false, L=false, R=false }
-            -- Restaure le WalkSpeed normal
             local h = getHum()
             if h then h.WalkSpeed = realWalkSpeed end
             return
@@ -265,12 +274,9 @@ local function startStealthSpeed()
         local hrp = getHRP()
         local hum2 = getHum()
         if not hrp or not hum2 then return end
-
-        -- Maintenir WalkSpeed à 0 (des scripts du jeu peuvent le reset)
         if hum2.WalkSpeed ~= 0 then hum2.WalkSpeed = 0 end
 
         local cam = getCam()
-        -- Direction horizontale seulement (pas de vol)
         local camFlat = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
         if camFlat.Magnitude < 0.01 then return end
         camFlat = camFlat.Unit
@@ -286,9 +292,7 @@ local function startStealthSpeed()
         if wishDir.Magnitude < 0.01 then return end
         wishDir = wishDir.Unit
 
-        -- Déplacement CFrame pur (comme l'orbit)
         local newPos = hrp.Position + wishDir * stealthSpeedValue * dt
-        -- On garde la hauteur Y intacte (le moteur physique gère la gravité)
         hrp.CFrame = CFrame.new(Vector3.new(newPos.X, hrp.Position.Y, newPos.Z))
             * CFrame.Angles(0, math.atan2(-wishDir.X, -wishDir.Z), 0)
     end)
@@ -297,7 +301,6 @@ end
 local function stopStealthSpeed()
     stealthSpeedEnabled = false
     stealthKeys = { F=false, B=false, L=false, R=false }
-    -- La boucle Heartbeat se stoppe elle-même et restore le WalkSpeed
 end
 
 -- ══════════════════════════════════════
@@ -311,47 +314,30 @@ local flyKeyUp      = nil
 local flyConn       = nil
 local flyJumpConn   = nil
 
-local savedJumpPower = nil
-local savedJumpHeight = nil
+local savedJumpPower    = nil
+local savedJumpHeight   = nil
 local savedUseJumpPower = nil
 
 local function disableJumpForFly()
-    local hum = getHum()
-    if not hum then return end
-
+    local hum = getHum(); if not hum then return end
     savedUseJumpPower = hum.UseJumpPower
-    savedJumpPower = hum.JumpPower
-    savedJumpHeight = hum.JumpHeight
-
-    hum.UseJumpPower = true
-    hum.JumpPower = 0
-    hum.JumpHeight = 0
+    savedJumpPower    = hum.JumpPower
+    savedJumpHeight   = hum.JumpHeight
+    hum.UseJumpPower  = true
+    hum.JumpPower     = 0
+    hum.JumpHeight    = 0
 end
 
 local function restoreJumpAfterFly()
-    local hum = getHum()
-    if not hum then return end
-
-    if savedUseJumpPower ~= nil then
-        hum.UseJumpPower = savedUseJumpPower
-    end
-
-    if savedJumpPower ~= nil then
-        hum.JumpPower = savedJumpPower
-    end
-
-    if savedJumpHeight ~= nil then
-        hum.JumpHeight = savedJumpHeight
-    end
-
-    savedUseJumpPower = nil
-    savedJumpPower = nil
-    savedJumpHeight = nil
+    local hum = getHum(); if not hum then return end
+    if savedUseJumpPower ~= nil then hum.UseJumpPower = savedUseJumpPower end
+    if savedJumpPower    ~= nil then hum.JumpPower    = savedJumpPower    end
+    if savedJumpHeight   ~= nil then hum.JumpHeight   = savedJumpHeight   end
+    savedUseJumpPower = nil; savedJumpPower = nil; savedJumpHeight = nil
 end
 
 local flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
-local flyVel = Vector3.zero
-
+local flyVel  = Vector3.zero
 local FLY_ACCEL    = 18
 local FLY_DECEL    = 20
 local FLY_DEADZONE = 0.05
@@ -365,11 +351,9 @@ local function NOFLY()
     if flyJumpConn then flyJumpConn:Disconnect(); flyJumpConn = nil end
     flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
     local hum = getHum()
-if hum then hum.WalkSpeed = realWalkSpeed end
-
-restoreJumpAfterFly()
-
-notify("Fly", "OFF", 2)
+    if hum then hum.WalkSpeed = realWalkSpeed end
+    restoreJumpAfterFly()
+    notify("Fly", "OFF", 2)
 end
 
 local function sFLY()
@@ -378,12 +362,10 @@ local function sFLY()
     if not hrp then notify("Fly", "Personnage introuvable !", 2) return end
 
     FLYING = true
-disableJumpForFly()
+    disableJumpForFly()
+    flyVel  = Vector3.zero
+    flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
 
-flyVel = Vector3.zero
-flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
-
-    -- Infinite Jump dédié au fly
     flyJumpConn = RunService.Heartbeat:Connect(function()
         if not FLYING then return end
         local hum = getHum()
@@ -419,7 +401,7 @@ flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
     flyConn = RunService.Heartbeat:Connect(function(dt)
         if not FLYING then return end
         local hrp2 = getHRP(); if not hrp2 then return end
-        local cam  = getCam()
+        local cam   = getCam()
         local camCF = cam.CFrame
 
         local wishDir = Vector3.zero
@@ -427,32 +409,29 @@ flyKeys = { F=false, B=false, L=false, R=false, U=false, D=false }
         if flyKeys.B then wishDir = wishDir - camCF.LookVector  end
         if flyKeys.L then wishDir = wishDir - camCF.RightVector end
         if flyKeys.R then wishDir = wishDir + camCF.RightVector end
-        if flyKeys.U then wishDir = wishDir + Vector3.new(0, 1, 0) end
-        if flyKeys.D then wishDir = wishDir - Vector3.new(0, 1, 0) end
+        if flyKeys.U then wishDir = wishDir + Vector3.new(0,1,0) end
+        if flyKeys.D then wishDir = wishDir - Vector3.new(0,1,0) end
 
         local anyKey = flyKeys.F or flyKeys.B or flyKeys.L or flyKeys.R or flyKeys.U or flyKeys.D
 
         if anyKey and wishDir.Magnitude > 0 then
-            local targetVel = wishDir.Unit * flySpeed
-            flyVel = flyVel:Lerp(targetVel, math.min(1, FLY_ACCEL * dt))
+            flyVel = flyVel:Lerp(wishDir.Unit * flySpeed, math.min(1, FLY_ACCEL * dt))
         else
             flyVel = flyVel:Lerp(Vector3.zero, math.min(1, FLY_DECEL * dt))
             if flyVel.Magnitude < FLY_DEADZONE then flyVel = Vector3.zero end
         end
 
         if flyVel.Magnitude > FLY_DEADZONE then
-            local newPos = hrp2.Position + flyVel * dt
+            local newPos  = hrp2.Position + flyVel * dt
             local flatVel = Vector3.new(flyVel.X, 0, flyVel.Z)
             if flatVel.Magnitude > 0.5 then
                 local goalRot = CFrame.lookAt(newPos, newPos + flatVel)
                 local currYaw = CFrame.new(newPos, newPos + Vector3.new(
-                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001
-                ))
+                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001))
                 hrp2.CFrame = currYaw:Lerp(goalRot, math.min(1, 10 * dt))
             else
                 hrp2.CFrame = CFrame.new(newPos, newPos + Vector3.new(
-                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001
-                ))
+                    hrp2.CFrame.LookVector.X, 0, hrp2.CFrame.LookVector.Z + 0.0001))
             end
         end
     end)
@@ -561,7 +540,6 @@ local aimbotFOV        = 300
 local aimbotShowFOV    = true
 local aimbotConn       = nil
 local wallbangFireConn = nil
-
 local wallbangDamage   = 15
 local wallbangRate     = 0.3
 
@@ -661,12 +639,12 @@ end)
 runAimbot()
 
 -- ══════════════════════════════════════════════════════════════
---  ESP / TRACKALL
+--  ESP / TRACKALL  — VERSION ROBUSTE
 -- ══════════════════════════════════════════════════════════════
 local espOptions = { skeleton = true, box = true, health = true, name = true, distance = true }
-local espMaxDistance  = 1000
-local trackOn         = false
-local STAFFDetectOn   = false
+local espMaxDistance = 1000
+local trackOn        = false
+local STAFFDetectOn  = false
 local playerSnapshots = {}
 local espObjects      = {}
 
@@ -711,19 +689,35 @@ local function cleanESP(plr)
     local obj = espObjects[plr.Name]; if not obj then return end
     espObjects[plr.Name] = nil
     if obj.conns then for _, c in pairs(obj.conns) do pcall(function() c:Disconnect() end) end end
-    if obj.highlight then pcall(function() obj.highlight:Destroy() end) end
-    if obj.billboard then pcall(function() obj.billboard:Destroy() end) end
+    if obj.highlight  then pcall(function() obj.highlight:Destroy() end) end
+    if obj.billboard  then pcall(function() obj.billboard:Destroy() end) end
     if obj.skeletonLines then for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false; l:Remove() end) end end
     if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false; obj.boxDrawing:Remove() end) end
 end
 
+local function isESPValid(plr)
+    local obj = espObjects[plr.Name]
+    if not obj then return false end
+    if not obj.highlight or not obj.highlight.Parent then return false end
+    if not obj.billboard or not obj.billboard.Parent then return false end
+    return true
+end
+
 local function setupESP(plr, char)
-    cleanESP(plr); task.wait(0.5)
+    cleanESP(plr)
+    task.wait(0.8)
     if not char or not char.Parent then return end
+    if plr.Character ~= char then return end
+
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then task.wait(1); hrp=char:FindFirstChild("HumanoidRootPart"); hum=char:FindFirstChildOfClass("Humanoid") end
+    if not hrp or not hum then
+        task.wait(1)
+        hrp = char:FindFirstChild("HumanoidRootPart")
+        hum = char:FindFirstChildOfClass("Humanoid")
+    end
     if not hrp or not hum then return end
+    if hum.Health <= 0 then return end
 
     local obj = { conns={}, skeletonLines={}, boxDrawing=nil, highlight=nil, billboard=nil }
 
@@ -736,65 +730,62 @@ local function setupESP(plr, char)
     bb.Adornee=hrp; bb.Size=UDim2.new(0,200,0,60); bb.StudsOffset=Vector3.new(0,3.2,0)
     bb.AlwaysOnTop=true; bb.Parent=hrp; obj.billboard=bb
 
-    local bg = Instance.new("Frame"); bg.Size=UDim2.new(1,0,1,0); bg.BackgroundTransparency=1; bg.BorderSizePixel=0; bg.Parent=bb
+    local bg = Instance.new("Frame")
+    bg.Size=UDim2.new(1,0,1,0); bg.BackgroundTransparency=1; bg.BorderSizePixel=0; bg.Parent=bb
 
-    local lName = Instance.new("TextLabel"); lName.Size=UDim2.new(1,0,0,22); lName.Position=UDim2.new(0,0,0,0)
-    lName.BackgroundTransparency=1; lName.Text=plr.Name; lName.TextColor3=Color3.fromRGB(255,255,255)
-    lName.TextStrokeColor3=Color3.fromRGB(0,0,0); lName.TextStrokeTransparency=0
-    lName.TextScaled=false; lName.TextSize=14; lName.Font=Enum.Font.GothamBold
-    lName.TextXAlignment=Enum.TextXAlignment.Center; lName.Visible=espOptions.name; lName.Parent=bg
+    local lName = Instance.new("TextLabel")
+    lName.Size=UDim2.new(1,0,0,22); lName.Position=UDim2.new(0,0,0,0)
+    lName.BackgroundTransparency=1; lName.Text=plr.Name
+    lName.TextColor3=Color3.fromRGB(255,255,255); lName.TextStrokeColor3=Color3.fromRGB(0,0,0)
+    lName.TextStrokeTransparency=0; lName.TextScaled=false; lName.TextSize=14
+    lName.Font=Enum.Font.GothamBold; lName.TextXAlignment=Enum.TextXAlignment.Center
+    lName.Visible=espOptions.name; lName.Parent=bg
 
-    local hpBg = Instance.new("Frame"); hpBg.Size=UDim2.new(0.85,0,0,5); hpBg.Position=UDim2.new(0.075,0,0,26)
-    hpBg.BackgroundColor3=Color3.fromRGB(40,40,40); hpBg.BackgroundTransparency=0.2; hpBg.BorderSizePixel=0
-    hpBg.Visible=espOptions.health; hpBg.Parent=bg; Instance.new("UICorner",hpBg).CornerRadius=UDim.new(1,0)
+    local hpBg = Instance.new("Frame")
+    hpBg.Size=UDim2.new(0.85,0,0,5); hpBg.Position=UDim2.new(0.075,0,0,26)
+    hpBg.BackgroundColor3=Color3.fromRGB(40,40,40); hpBg.BackgroundTransparency=0.2
+    hpBg.BorderSizePixel=0; hpBg.Visible=espOptions.health; hpBg.Parent=bg
+    Instance.new("UICorner",hpBg).CornerRadius=UDim.new(1,0)
 
-    local hpBar = Instance.new("Frame"); hpBar.Size=UDim2.new(1,0,1,0); hpBar.BackgroundColor3=Color3.fromRGB(50,220,80)
-    hpBar.BorderSizePixel=0; hpBar.Parent=hpBg; Instance.new("UICorner",hpBar).CornerRadius=UDim.new(1,0)
+    local hpBar = Instance.new("Frame")
+    hpBar.Size=UDim2.new(1,0,1,0); hpBar.BackgroundColor3=Color3.fromRGB(50,220,80)
+    hpBar.BorderSizePixel=0; hpBar.Parent=hpBg
+    Instance.new("UICorner",hpBar).CornerRadius=UDim.new(1,0)
 
-    local lHP = Instance.new("TextLabel"); lHP.Size=UDim2.new(1,0,0,14); lHP.Position=UDim2.new(0,0,0,33)
+    local lHP = Instance.new("TextLabel")
+    lHP.Size=UDim2.new(1,0,0,14); lHP.Position=UDim2.new(0,0,0,33)
     lHP.BackgroundTransparency=1; lHP.Text=math.floor(hum.Health).."/"..math.floor(hum.MaxHealth)
     lHP.TextColor3=Color3.fromRGB(255,255,255); lHP.TextStrokeColor3=Color3.fromRGB(0,0,0)
     lHP.TextStrokeTransparency=0; lHP.TextScaled=false; lHP.TextSize=11; lHP.Font=Enum.Font.Gotham
     lHP.TextXAlignment=Enum.TextXAlignment.Center; lHP.Visible=espOptions.health; lHP.Parent=bg
 
-    local lDist = Instance.new("TextLabel"); lDist.Size=UDim2.new(1,0,0,14); lDist.Position=UDim2.new(0,0,0,47)
-    lDist.BackgroundTransparency=1; lDist.Text="0m"; lDist.TextColor3=Color3.fromRGB(255,255,255)
-    lDist.TextStrokeColor3=Color3.fromRGB(0,0,0); lDist.TextStrokeTransparency=0; lDist.TextScaled=false
-    lDist.TextSize=11; lDist.Font=Enum.Font.Gotham; lDist.TextXAlignment=Enum.TextXAlignment.Center
-    lDist.Visible=espOptions.distance; lDist.Parent=bg
+    local lDist = Instance.new("TextLabel")
+    lDist.Size=UDim2.new(1,0,0,14); lDist.Position=UDim2.new(0,0,0,47)
+    lDist.BackgroundTransparency=1; lDist.Text="0m"
+    lDist.TextColor3=Color3.fromRGB(255,255,255); lDist.TextStrokeColor3=Color3.fromRGB(0,0,0)
+    lDist.TextStrokeTransparency=0; lDist.TextScaled=false; lDist.TextSize=11; lDist.Font=Enum.Font.Gotham
+    lDist.TextXAlignment=Enum.TextXAlignment.Center; lDist.Visible=espOptions.distance; lDist.Parent=bg
 
-    for _, bone in ipairs(SKELETON_BONES) do table.insert(obj.skeletonLines, newLine()) end
+    for _ in ipairs(SKELETON_BONES) do table.insert(obj.skeletonLines, newLine()) end
     local boxD = newBox(); obj.boxDrawing = boxD
 
     table.insert(obj.conns, hum.Died:Connect(function()
-        for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
-        if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
-        task.wait(0.05); cleanESP(plr)
+        task.wait(0.1); cleanESP(plr)
     end))
-
     table.insert(obj.conns, char.AncestryChanged:Connect(function(_, parent)
-        if not parent then
-            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
-            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
-            cleanESP(plr)
-        end
+        if not parent then cleanESP(plr) end
     end))
-
     table.insert(obj.conns, hum.HealthChanged:Connect(function(hp)
         if not hpBar or not hpBar.Parent then return end
         local ratio = math.clamp(hp / hum.MaxHealth, 0, 1)
-        hpBar.Size = UDim2.new(ratio, 0, 1, 0)
+        hpBar.Size = UDim2.new(ratio,0,1,0)
         hpBar.BackgroundColor3 = Color3.fromRGB(math.floor((1-ratio)*80), math.floor(50+ratio*170), math.floor(ratio*80))
         lHP.Text = math.floor(hp).."/"..math.floor(hum.MaxHealth)
     end))
 
     local frameCount = 0
     table.insert(obj.conns, RunService.RenderStepped:Connect(function()
-        if not char or not char.Parent or not hrp or not hrp.Parent then
-            for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false end) end
-            if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false end) end
-            cleanESP(plr); return
-        end
+        if not char or not char.Parent or not hrp or not hrp.Parent then cleanESP(plr); return end
         local myRoot=getHRP(); local cam=getCam(); local dist=0
         if myRoot then dist=math.floor((hrp.Position-myRoot.Position).Magnitude) end
         local tooFar = dist > espMaxDistance
@@ -806,17 +797,16 @@ local function setupESP(plr, char)
         lDist.Visible=espOptions.distance and not tooFar
         if not tooFar then lDist.Text=dist.."m" end
         frameCount += 1
-        if STAFFDetectOn and frameCount % 15 == 0 then
-            local isS = isSuspectedSTAFF(plr)
-            if isS then
+        if STAFFDetectOn and frameCount%15==0 then
+            if isSuspectedSTAFF(plr) then
                 hl.FillColor=Color3.fromRGB(220,20,20); hl.OutlineColor=Color3.fromRGB(255,80,80); lName.TextColor3=Color3.fromRGB(255,80,80)
             else
                 hl.FillColor=Color3.fromRGB(255,255,255); hl.OutlineColor=Color3.fromRGB(255,255,255); lName.TextColor3=Color3.fromRGB(255,255,255)
             end
         end
-        local showSkel = espOptions.skeleton and not tooFar
-        for i, bone in ipairs(SKELETON_BONES) do
-            local line = obj.skeletonLines[i]
+        local showSkel=espOptions.skeleton and not tooFar
+        for i,bone in ipairs(SKELETON_BONES) do
+            local line=obj.skeletonLines[i]
             if line then
                 if showSkel then
                     local p0=char:FindFirstChild(bone[1]); local p1=char:FindFirstChild(bone[2])
@@ -832,7 +822,7 @@ local function setupESP(plr, char)
         if boxD then
             if espOptions.box and not tooFar then
                 local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge; local anyOnScreen=false
-                for _, part in pairs(char:GetDescendants()) do
+                for _,part in pairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then
                         local sp,onScreen=cam:WorldToViewportPoint(part.Position)
                         if onScreen and sp.Z>0 then
@@ -843,7 +833,8 @@ local function setupESP(plr, char)
                     end
                 end
                 if anyOnScreen then
-                    local pad=4; boxD.Position=Vector2.new(minX-pad,minY-pad); boxD.Size=Vector2.new((maxX-minX)+pad*2,(maxY-minY)+pad*2); boxD.Visible=true; boxD.Color=Color3.fromRGB(255,255,255)
+                    local pad=4; boxD.Position=Vector2.new(minX-pad,minY-pad)
+                    boxD.Size=Vector2.new((maxX-minX)+pad*2,(maxY-minY)+pad*2); boxD.Visible=true; boxD.Color=Color3.fromRGB(255,255,255)
                 else boxD.Visible=false end
             else boxD.Visible=false end
         end
@@ -853,42 +844,25 @@ local function setupESP(plr, char)
 end
 
 local espCharConns = {}
-local function addESP(plr)
+local function subscribeESP(plr)
     if plr == LP then return end
-    cleanESP(plr)
-    if plr.Character then task.spawn(setupESP, plr, plr.Character) end
     if espCharConns[plr.Name] then espCharConns[plr.Name]:Disconnect() end
     espCharConns[plr.Name] = plr.CharacterAdded:Connect(function(char)
         if trackOn then task.spawn(setupESP, plr, char) end
     end)
 end
 
-task.spawn(function()
-    while true do task.wait(2)
-        if trackOn then
-            for _, plr in pairs(Players:GetPlayers()) do
-                if plr ~= LP then
-                    local obj = espObjects[plr.Name]
-                    if (not obj or not obj.highlight or not obj.highlight.Parent) and plr.Character then
-                        local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then task.spawn(setupESP, plr, plr.Character) end
-                    end
-                end
-            end
-        end
-    end
-end)
-
+for _, p in pairs(Players:GetPlayers()) do subscribeESP(p) end
 Players.PlayerAdded:Connect(function(p)
-    if p == LP then return end
-    if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect() end
-    espCharConns[p.Name] = p.CharacterAdded:Connect(function(char)
-        task.wait(0.5)
-        if trackOn then task.spawn(setupESP, p, char) end
-    end)
-    if trackOn and p.Character then
-        task.wait(1)
-        task.spawn(setupESP, p, p.Character)
+    subscribeESP(p)
+    if trackOn then
+        local char = p.Character
+        if not char then
+            local conn; conn = p.CharacterAdded:Connect(function(c)
+                conn:Disconnect()
+                if trackOn then task.spawn(setupESP, p, c) end
+            end)
+        else task.spawn(setupESP, p, char) end
     end
 end)
 
@@ -896,6 +870,27 @@ Players.PlayerRemoving:Connect(function(p)
     cleanESP(p)
     if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect(); espCharConns[p.Name]=nil end
     playerSnapshots[p.Name]=nil
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1.5)
+        if trackOn then
+            for _, plr in pairs(Players:GetPlayers()) do
+                if plr ~= LP then
+                    local char = plr.Character
+                    if char then
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health>0 and not isESPValid(plr) then
+                            task.spawn(setupESP, plr, char)
+                        end
+                    else
+                        if espObjects[plr.Name] then cleanESP(plr) end
+                    end
+                end
+            end
+        end
+    end
 end)
 
 -- ══════════════════════════════════════
@@ -908,30 +903,27 @@ local orbitSpeed  = 1.5
 
 local function startOrbit(target)
     if orbitActive then return end
-    orbitActive = true
-    orbitAngle  = 0
-    notify("Orbit", "ON → "..target.Name, 2)
+    orbitActive=true; orbitAngle=0
+    notify("Orbit","ON → "..target.Name,2)
     task.spawn(function()
         while orbitActive do
-            local tRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-            local myRoot = getHRP()
+            local tRoot=target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+            local myRoot=getHRP()
             if not tRoot or not myRoot or not target.Character then
-                task.wait(0.1); orbitAngle += orbitSpeed * 0.1; continue
+                task.wait(0.1); orbitAngle+=orbitSpeed*0.1; continue
             end
-            orbitAngle = orbitAngle + orbitSpeed * 0.05
-            local offsetX = math.cos(orbitAngle) * orbitRadius
-            local offsetZ = math.sin(orbitAngle) * orbitRadius
-            local targetPos = tRoot.Position + Vector3.new(offsetX, 2, offsetZ)
-            myRoot.CFrame = CFrame.new(targetPos, tRoot.Position)
+            orbitAngle=orbitAngle+orbitSpeed*0.05
+            local offsetX=math.cos(orbitAngle)*orbitRadius
+            local offsetZ=math.sin(orbitAngle)*orbitRadius
+            local targetPos=tRoot.Position+Vector3.new(offsetX,2,offsetZ)
+            myRoot.CFrame=CFrame.new(targetPos,tRoot.Position)
             task.wait(0.05)
         end
-        notify("Orbit", "OFF", 2)
+        notify("Orbit","OFF",2)
     end)
 end
 
-local function stopOrbit()
-    orbitActive = false
-end
+local function stopOrbit() orbitActive=false end
 
 -- ══════════════════════════════════════
 --  VÉHICULE
@@ -941,7 +933,7 @@ local vehicleSpeed    = 100
 
 local function scanVehicles()
     local found={}
-    for _, obj in pairs(workspace:GetDescendants()) do
+    for _,obj in pairs(workspace:GetDescendants()) do
         if obj:IsA("VehicleSeat") or obj:IsA("Seat") then
             local model=obj:FindFirstAncestorOfClass("Model")
             if model and not table.find(found,model) then table.insert(found,model) end
@@ -949,30 +941,44 @@ local function scanVehicles()
     end
     return found
 end
+
 local function detectVehicle()
-    local hum=getHum(); if hum and hum.SeatPart then local model=hum.SeatPart:FindFirstAncestorOfClass("Model"); if model then detectedVehicle=model; return true end end
+    local hum=getHum()
+    if hum and hum.SeatPart then
+        local model=hum.SeatPart:FindFirstAncestorOfClass("Model")
+        if model then detectedVehicle=model; return true end
+    end
     local username=LP.Name:lower()
-    for _, obj in pairs(workspace:GetDescendants()) do
+    for _,obj in pairs(workspace:GetDescendants()) do
         if obj:IsA("Model") and obj.Name:lower():find(username) then
-            if obj:FindFirstChildOfClass("VehicleSeat") or obj:FindFirstChildOfClass("Seat") then detectedVehicle=obj; return true end
+            if obj:FindFirstChildOfClass("VehicleSeat") or obj:FindFirstChildOfClass("Seat") then
+                detectedVehicle=obj; return true
+            end
         end
     end
     local list=scanVehicles(); if #list>0 then detectedVehicle=list[1]; return true end
     return false
 end
+
 local function bindSeatDetect()
     local hum=getHum(); if not hum then return end
     hum:GetPropertyChangedSignal("SeatPart"):Connect(function()
         local seat=hum.SeatPart
-        if seat then local model=seat:FindFirstAncestorOfClass("Model"); if model then detectedVehicle=model; notify("Véhicule","'"..model.Name.."' verrouillé !",2) end end
+        if seat then
+            local model=seat:FindFirstAncestorOfClass("Model")
+            if model then detectedVehicle=model; notify("Véhicule","'"..model.Name.."' verrouillé !",2) end
+        end
     end)
 end
 bindSeatDetect()
 LP.CharacterAdded:Connect(function() task.wait(1); bindSeatDetect() end)
 task.spawn(function()
     while task.wait(0.5) do
-        if not detectedVehicle then if detectVehicle() then notify("Véhicule","'"..detectedVehicle.Name.."' détecté !",3) end
-        else if not detectedVehicle.Parent then detectedVehicle=nil end end
+        if not detectedVehicle then
+            if detectVehicle() then notify("Véhicule","'"..detectedVehicle.Name.."' détecté !",3) end
+        else
+            if not detectedVehicle.Parent then detectedVehicle=nil end
+        end
     end
 end)
 
@@ -982,22 +988,180 @@ local function tpVehicleTo(pos)
         detectedVehicle:SetPrimaryPartCFrame(CFrame.new(pos))
     else
         local root=nil
-        for _, p in pairs(detectedVehicle:GetDescendants()) do if p:IsA("BasePart") and not p.Anchored then root=p; break end end
-        if root then local offset=pos-root.Position; for _, p in pairs(detectedVehicle:GetDescendants()) do if p:IsA("BasePart") then p.CFrame=p.CFrame+offset end end end
+        for _,p in pairs(detectedVehicle:GetDescendants()) do
+            if p:IsA("BasePart") and not p.Anchored then root=p; break end
+        end
+        if root then
+            local offset=pos-root.Position
+            for _,p in pairs(detectedVehicle:GetDescendants()) do
+                if p:IsA("BasePart") then p.CFrame=p.CFrame+offset end
+            end
+        end
     end
     return true
 end
 
--- ── Vehicle Speed : applique MaxSpeed sur toutes les VehicleSeat du véhicule détecté
 local function applyVehicleSpeed(speed)
-    vehicleSpeed = speed
+    vehicleSpeed=speed
     if not detectedVehicle or not detectedVehicle.Parent then return end
-    for _, obj in pairs(detectedVehicle:GetDescendants()) do
-        if obj:IsA("VehicleSeat") then
-            pcall(function() obj.MaxSpeed = speed end)
-        end
+    for _,obj in pairs(detectedVehicle:GetDescendants()) do
+        if obj:IsA("VehicleSeat") then pcall(function() obj.MaxSpeed=speed end) end
     end
 end
+
+-- ══════════════════════════════════════════════════════════════
+--  VEHICLE FLY
+--  Principe : même logique que le fly perso mais on déplace le
+--  PrimaryPart (ou la première BasePart non-anchored) du véhicule
+--  via CFrame chaque Heartbeat. WASD = horizontal, E/Q = haut/bas.
+--  Le perso reste assis dedans (pas de TP du joueur).
+-- ══════════════════════════════════════════════════════════════
+local vehFlyActive   = false
+local vehFlySpeed    = 60
+local vehFlyVel      = Vector3.zero
+local vehFlyConn     = nil
+local vehFlyKeyDown  = nil
+local vehFlyKeyUp    = nil
+local vehFlyKeys     = { F=false, B=false, L=false, R=false, U=false, D=false }
+
+local VEH_ACCEL    = 14
+local VEH_DECEL    = 18
+local VEH_DEADZONE = 0.05
+
+-- Trouve la "racine" physique du véhicule (PrimaryPart ou première BasePart libre)
+local function getVehRoot()
+    if not detectedVehicle or not detectedVehicle.Parent then return nil end
+    if detectedVehicle.PrimaryPart then return detectedVehicle.PrimaryPart end
+    for _,p in pairs(detectedVehicle:GetDescendants()) do
+        if p:IsA("BasePart") and not p.Anchored then return p end
+    end
+    return nil
+end
+
+local function stopVehFly()
+    vehFlyActive = false
+    vehFlyVel    = Vector3.zero
+    vehFlyKeys   = { F=false, B=false, L=false, R=false, U=false, D=false }
+    if vehFlyKeyDown then vehFlyKeyDown:Disconnect(); vehFlyKeyDown=nil end
+    if vehFlyKeyUp   then vehFlyKeyUp:Disconnect();   vehFlyKeyUp=nil   end
+    if vehFlyConn    then vehFlyConn:Disconnect();    vehFlyConn=nil    end
+    notify("Veh Fly","OFF",2)
+end
+
+local function startVehFly()
+    if vehFlyActive then stopVehFly(); return end
+
+    -- Vérif véhicule disponible
+    if not detectedVehicle or not detectedVehicle.Parent then
+        if not detectVehicle() then
+            notify("Veh Fly","Aucun véhicule détecté !",3); return
+        end
+    end
+    if not getVehRoot() then notify("Veh Fly","Véhicule sans BasePart !",3); return end
+
+    vehFlyActive = true
+    vehFlyVel    = Vector3.zero
+    vehFlyKeys   = { F=false, B=false, L=false, R=false, U=false, D=false }
+
+    -- Touches WASD + E/Q (indépendant du fly perso)
+    vehFlyKeyDown = UIS.InputBegan:Connect(function(i, g)
+        if g then return end
+        local k = i.KeyCode
+        if k == Enum.KeyCode.W then vehFlyKeys.F=true
+        elseif k == Enum.KeyCode.S then vehFlyKeys.B=true
+        elseif k == Enum.KeyCode.A then vehFlyKeys.L=true
+        elseif k == Enum.KeyCode.D then vehFlyKeys.R=true
+        elseif k == Enum.KeyCode.E then vehFlyKeys.U=true
+        elseif k == Enum.KeyCode.Q then vehFlyKeys.D=true
+        end
+    end)
+    vehFlyKeyUp = UIS.InputEnded:Connect(function(i, g)
+        if g then return end
+        local k = i.KeyCode
+        if k == Enum.KeyCode.W then vehFlyKeys.F=false
+        elseif k == Enum.KeyCode.S then vehFlyKeys.B=false
+        elseif k == Enum.KeyCode.A then vehFlyKeys.L=false
+        elseif k == Enum.KeyCode.D then vehFlyKeys.R=false
+        elseif k == Enum.KeyCode.E then vehFlyKeys.U=false
+        elseif k == Enum.KeyCode.Q then vehFlyKeys.D=false
+        end
+    end)
+
+    vehFlyConn = RunService.Heartbeat:Connect(function(dt)
+        if not vehFlyActive then return end
+
+        -- Si le véhicule a disparu → stop auto
+        local vRoot = getVehRoot()
+        if not vRoot then stopVehFly(); return end
+
+        local cam    = getCam()
+        local camCF  = cam.CFrame
+
+        -- Direction caméra complète (comme le fly perso)
+        local wishDir = Vector3.zero
+        if vehFlyKeys.F then wishDir = wishDir + camCF.LookVector  end
+        if vehFlyKeys.B then wishDir = wishDir - camCF.LookVector  end
+        if vehFlyKeys.L then wishDir = wishDir - camCF.RightVector end
+        if vehFlyKeys.R then wishDir = wishDir + camCF.RightVector end
+        if vehFlyKeys.U then wishDir = wishDir + Vector3.new(0,1,0) end
+        if vehFlyKeys.D then wishDir = wishDir - Vector3.new(0,1,0) end
+
+        local anyKey = vehFlyKeys.F or vehFlyKeys.B or vehFlyKeys.L or vehFlyKeys.R or vehFlyKeys.U or vehFlyKeys.D
+
+        if anyKey and wishDir.Magnitude > 0 then
+            vehFlyVel = vehFlyVel:Lerp(wishDir.Unit * vehFlySpeed, math.min(1, VEH_ACCEL * dt))
+        else
+            vehFlyVel = vehFlyVel:Lerp(Vector3.zero, math.min(1, VEH_DECEL * dt))
+            if vehFlyVel.Magnitude < VEH_DEADZONE then vehFlyVel = Vector3.zero end
+        end
+
+        if vehFlyVel.Magnitude > VEH_DEADZONE then
+            local newPos = vRoot.Position + vehFlyVel * dt
+
+            -- On déplace le véhicule entier via offset CFrame
+            local offset = newPos - vRoot.Position
+            if detectedVehicle.PrimaryPart then
+                detectedVehicle:SetPrimaryPartCFrame(
+                    detectedVehicle.PrimaryPart.CFrame + offset
+                )
+            else
+                for _,p in pairs(detectedVehicle:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CFrame = p.CFrame + offset
+                    end
+                end
+            end
+
+            -- Annuler la gravité / vélocité pour que le véhicule reste en l'air
+            pcall(function()
+                for _,p in pairs(detectedVehicle:GetDescendants()) do
+                    if p:IsA("BasePart") and not p.Anchored then
+                        p.Velocity        = Vector3.zero
+                        p.RotVelocity     = Vector3.zero
+                    end
+                end
+            end)
+        else
+            -- Maintien en l'air même quand on ne bouge pas
+            pcall(function()
+                for _,p in pairs(detectedVehicle:GetDescendants()) do
+                    if p:IsA("BasePart") and not p.Anchored then
+                        p.Velocity    = Vector3.zero
+                        p.RotVelocity = Vector3.zero
+                    end
+                end
+            end)
+        end
+    end)
+
+    notify("Veh Fly","ON — WASD + E/Q | RightCtrl = stop | Vitesse : "..vehFlySpeed,4)
+end
+
+-- Keybind RightCtrl → toggle Vehicle Fly
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.RightControl then startVehFly() end
+end)
 
 -- ══════════════════════════════════════
 --  FREECAM (Numpad 8)
@@ -1008,21 +1172,14 @@ local function launchFreecam()
     if freecamActive then return end
     freecamActive = true
 
-    local fc_speed     = 40
-    local fc_camCF     = getCam().CFrame
-    local fc_pitch     = 0
-    local fc_yaw       = 0
-    local fc_mouseDown = false
-    local fc_keys      = {F=0,B=0,L=0,R=0,U=0,D=0}
-    local cam          = getCam()
-    local oldCamType   = cam.CameraType
-    cam.CameraType     = Enum.CameraType.Scriptable
-    fc_camCF           = cam.CFrame
+    local fc_speed=40; local fc_camCF=getCam().CFrame; local fc_pitch=0; local fc_yaw=0
+    local fc_mouseDown=false; local fc_keys={F=0,B=0,L=0,R=0,U=0,D=0}
+    local cam=getCam(); local oldCamType=cam.CameraType
+    cam.CameraType=Enum.CameraType.Scriptable; fc_camCF=cam.CFrame
 
-    local screenGui = Instance.new("ScreenGui")
+    local screenGui=Instance.new("ScreenGui")
     screenGui.Name="FreecamHUD"; screenGui.ResetOnSpawn=false
-    screenGui.IgnoreGuiInset=true; screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-    screenGui.Parent=LP.PlayerGui
+    screenGui.IgnoreGuiInset=true; screenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; screenGui.Parent=LP.PlayerGui
 
     local BAR_H=52
     local barFrame=Instance.new("Frame")
@@ -1030,9 +1187,7 @@ local function launchFreecam()
     barFrame.BackgroundColor3=Color3.fromRGB(0,0,0); barFrame.BackgroundTransparency=0.35
     barFrame.BorderSizePixel=0; barFrame.Parent=screenGui
 
-    local sep=Instance.new("Frame")
-    sep.Size=UDim2.new(1,0,0,2); sep.BackgroundColor3=Color3.fromRGB(60,120,255)
-    sep.BorderSizePixel=0; sep.Parent=barFrame
+    local sep=Instance.new("Frame"); sep.Size=UDim2.new(1,0,0,2); sep.BackgroundColor3=Color3.fromRGB(60,120,255); sep.BorderSizePixel=0; sep.Parent=barFrame
 
     local titleLabel=Instance.new("TextLabel")
     titleLabel.Size=UDim2.new(0,200,1,0); titleLabel.Position=UDim2.new(0,14,0,0)
@@ -1055,11 +1210,11 @@ local function launchFreecam()
 
     local PANEL_W=270; local SEL_H=78; local UNSEL_H=36; local ITEM_GAP=6
     local PANEL_PAD_X=10; local PANEL_PAD_Y=10; local HEADER_H=20
-    local fc_options = {
-        { label="📡 TP Ici",  desc="Téléporte ton perso ici",  key="↵ Entrée" },
-        { label="🚗 TP Car",  desc="Téléporte la voiture ici", key="↵ Entrée" },
+    local fc_options={
+        {label="📡 TP Ici",desc="Téléporte ton perso ici",key="↵ Entrée"},
+        {label="🚗 TP Car",desc="Téléporte la voiture ici",key="↵ Entrée"},
     }
-    local fc_selectedOption = 1
+    local fc_selectedOption=1
 
     local function calcPanelH()
         local h=PANEL_PAD_Y+HEADER_H+ITEM_GAP
@@ -1072,8 +1227,7 @@ local function launchFreecam()
     optPanel.Position=UDim2.new(0.5,0,1,-(BAR_H+14)); optPanel.BackgroundColor3=Color3.fromRGB(5,8,22)
     optPanel.BackgroundTransparency=0.12; optPanel.BorderSizePixel=0; optPanel.Parent=screenGui
     Instance.new("UICorner",optPanel).CornerRadius=UDim.new(0,12)
-    local panelStroke=Instance.new("UIStroke"); panelStroke.Color=Color3.fromRGB(45,85,210)
-    panelStroke.Thickness=1.5; panelStroke.Parent=optPanel
+    local panelStroke=Instance.new("UIStroke"); panelStroke.Color=Color3.fromRGB(45,85,210); panelStroke.Thickness=1.5; panelStroke.Parent=optPanel
 
     local panelTitle=Instance.new("TextLabel")
     panelTitle.Size=UDim2.new(1,0,0,HEADER_H); panelTitle.Position=UDim2.new(0,0,0,PANEL_PAD_Y)
@@ -1083,10 +1237,10 @@ local function launchFreecam()
 
     local optFrameList={}
     local function buildOptFrames()
-        for _, f in pairs(optFrameList) do f:Destroy() end; optFrameList={}
+        for _,f in pairs(optFrameList) do f:Destroy() end; optFrameList={}
         local newH=calcPanelH(); optPanel.Size=UDim2.new(0,PANEL_W,0,newH)
         local yOff=PANEL_PAD_Y+HEADER_H+ITEM_GAP
-        for i, opt in ipairs(fc_options) do
+        for i,opt in ipairs(fc_options) do
             local isSel=(i==fc_selectedOption); local itemH=isSel and SEL_H or UNSEL_H
             local f=Instance.new("Frame")
             f.Size=UDim2.new(1,-PANEL_PAD_X*2,0,itemH); f.Position=UDim2.new(0,PANEL_PAD_X,0,yOff)
@@ -1116,8 +1270,10 @@ local function launchFreecam()
 
     local crosshair=Instance.new("Frame"); crosshair.Size=UDim2.new(0,20,0,20); crosshair.Position=UDim2.new(0.5,-10,0.5,-10)
     crosshair.BackgroundTransparency=1; crosshair.Parent=screenGui
-    local function makeLine2(w,h,x,y) local l=Instance.new("Frame"); l.Size=UDim2.new(0,w,0,h); l.Position=UDim2.new(0,x,0,y)
-        l.BackgroundColor3=Color3.fromRGB(255,255,255); l.BackgroundTransparency=0.25; l.BorderSizePixel=0; l.Parent=crosshair end
+    local function makeLine2(w,h,x,y)
+        local l=Instance.new("Frame"); l.Size=UDim2.new(0,w,0,h); l.Position=UDim2.new(0,x,0,y)
+        l.BackgroundColor3=Color3.fromRGB(255,255,255); l.BackgroundTransparency=0.25; l.BorderSizePixel=0; l.Parent=crosshair
+    end
     makeLine2(2,20,9,0); makeLine2(20,2,0,9)
 
     local conns={}
@@ -1149,8 +1305,7 @@ local function launchFreecam()
     end
     local function onMouseMoved(inp)
         if not fc_mouseDown then return end
-        local delta=inp.Delta
-        fc_yaw=fc_yaw-delta.X*0.003; fc_pitch=fc_pitch-delta.Y*0.003
+        local delta=inp.Delta; fc_yaw=fc_yaw-delta.X*0.003; fc_pitch=fc_pitch-delta.Y*0.003
         fc_pitch=math.clamp(fc_pitch,-math.pi/2+0.05,math.pi/2-0.05)
     end
     local function onMouseWheel(inp)
@@ -1167,7 +1322,7 @@ local function launchFreecam()
     renderConn=RunService.RenderStepped:Connect(function(dt)
         if not freecamActive then
             renderConn:Disconnect()
-            for _, c in pairs(conns) do c:Disconnect() end
+            for _,c in pairs(conns) do c:Disconnect() end
             UIS.MouseBehavior=Enum.MouseBehavior.Default
             cam.CameraType=oldCamType; screenGui:Destroy()
             notify("🎥 Freecam","OFF",2); return
@@ -1186,7 +1341,7 @@ end
 UIS.InputBegan:Connect(function(input, gpe)
     if gpe then return end
     if input.KeyCode == Enum.KeyCode.KeypadEight then
-        if freecamActive then freecamActive = false else launchFreecam() end
+        if freecamActive then freecamActive=false else launchFreecam() end
     end
 end)
 
@@ -1196,36 +1351,34 @@ end)
 
 -- ── PAGE 1 : SELF ─────────────────────────────────────────────
 local PageSelf = Window:Page({ Icon = "rbxassetid://105280638458155" })
-
-local SecSelf = PageSelf:Section({ Name = "Self Options", Side = 1 })
+local SecSelf  = PageSelf:Section({ Name = "Self Options", Side = 1 })
 
 SecSelf:Slider({
     Name = "Walk Speed (furtif)", Flag = "WalkSpeed",
     Min = 0, Max = 999, Default = 16, Decimals = 1,
     Callback = function(v)
-        realWalkSpeed = v
-        stealthSpeedValue = v
-        if stealthSpeedEnabled then
-            -- déjà actif : on met juste à jour la valeur, la boucle l'utilise en live
-        else
-            -- Mode normal : on set le WalkSpeed Roblox classique si stealth pas actif
-            local h = getHum()
-            if h and not FLYING then h.WalkSpeed = v end
+        realWalkSpeed=v; stealthSpeedValue=v
+        if not stealthSpeedEnabled then
+            local h=getHum(); if h and not FLYING then h.WalkSpeed=v end
         end
+    end,
+})
+
+SecSelf:Button({
+    Name = "Reset Speed (→ 16)",
+    Callback = function()
+        realWalkSpeed=16; stealthSpeedValue=16
+        local h=getHum(); if h and not FLYING then h.WalkSpeed=16 end
+        notify("Speed","Reset à 16 !",2)
     end,
 })
 
 SecSelf:Toggle({
     Name = "Mode Speed Furtif", Flag = "StealthSpeed", Default = false,
     Callback = function(v)
-        stealthSpeedEnabled = v
-        if v then
-            startStealthSpeed()
-            notify("Speed Furtif", "ON — CFrame comme l'orbit, indétectable", 3)
-        else
-            stopStealthSpeed()
-            notify("Speed Furtif", "OFF", 2)
-        end
+        stealthSpeedEnabled=v
+        if v then startStealthSpeed(); notify("Speed Furtif","ON — CFrame, indétectable",3)
+        else stopStealthSpeed(); notify("Speed Furtif","OFF",2) end
     end,
 })
 
@@ -1238,71 +1391,55 @@ SecSelf:Slider({
 SecSelf:Slider({
     Name = "Fly Speed", Flag = "FlySpeed",
     Min = 10, Max = 500, Default = 80, Decimals = 1,
-    Callback = function(v) flySpeed=v; notify("Fly Speed", v.." st/s", 1, 0.8) end,
+    Callback = function(v) flySpeed=v; notify("Fly Speed",v.." st/s",1,0.8) end,
 })
 
-local ijConn = nil
+local ijConn=nil
 SecSelf:Toggle({
     Name = "Infinite Jump", Flag = "IJ", Default = false,
     Callback = function(v)
         if ijConn then ijConn:Disconnect(); ijConn=nil end
         if v then ijConn=UIS.JumpRequest:Connect(function() local h=getHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end) end
-        notify("Infinite Jump", v and "ON" or "OFF", 2)
+        notify("Infinite Jump",v and "ON" or "OFF",2)
     end,
 })
 
-local ncConn = nil
+local ncConn=nil
 SecSelf:Toggle({
     Name = "Noclip", Flag = "NC", Default = false,
     Callback = function(v)
         if ncConn then ncConn:Disconnect(); ncConn=nil end
-        if v then ncConn=RunService.Stepped:Connect(function() local c=getChar(); if c then for _, p in pairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end end end) end
-        notify("Noclip", v and "ON" or "OFF", 2)
+        if v then ncConn=RunService.Stepped:Connect(function()
+            local c=getChar(); if c then for _,p in pairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end end
+        end) end
+        notify("Noclip",v and "ON" or "OFF",2)
     end,
 })
 
-local invisActive = false
-local invisConns  = {}
-local invisOriginalTransp = {}
+local invisActive=false; local invisConns={}; local invisOriginalTransp={}
 
-local function applyInvis(char, bool)
+local function applyInvis(char,bool)
     if not char then return end
-    for _, p in pairs(char:GetDescendants()) do
+    for _,p in pairs(char:GetDescendants()) do
         if p:IsA("BasePart") then
-            if p.Name == "HumanoidRootPart" then
-                p.Transparency = 1
-            else
-                if bool then
-                    invisOriginalTransp[p] = p.Transparency
-                    p.Transparency = 1
-                else
-                    p.Transparency = invisOriginalTransp[p] or 0
-                end
-            end
+            if p.Name=="HumanoidRootPart" then p.Transparency=1
+            else if bool then invisOriginalTransp[p]=p.Transparency; p.Transparency=1
+                else p.Transparency=invisOriginalTransp[p] or 0 end end
         elseif p:IsA("Decal") then
-            if bool then
-                invisOriginalTransp[p] = p.Transparency
-                p.Transparency = 1
-            else
-                p.Transparency = invisOriginalTransp[p] or 0
-            end
+            if bool then invisOriginalTransp[p]=p.Transparency; p.Transparency=1
+            else p.Transparency=invisOriginalTransp[p] or 0 end
         end
     end
-    for _, acc in pairs(char:GetChildren()) do
+    for _,acc in pairs(char:GetChildren()) do
         if acc:IsA("Accessory") or acc:IsA("Hat") then
-            local handle = acc:FindFirstChild("Handle")
+            local handle=acc:FindFirstChild("Handle")
             if handle then
                 if bool then
-                    invisOriginalTransp[handle] = handle.Transparency
-                    handle.Transparency = 1
-                    for _, d in pairs(handle:GetDescendants()) do
-                        if d:IsA("BasePart") then invisOriginalTransp[d] = d.Transparency; d.Transparency = 1 end
-                    end
+                    invisOriginalTransp[handle]=handle.Transparency; handle.Transparency=1
+                    for _,d in pairs(handle:GetDescendants()) do if d:IsA("BasePart") then invisOriginalTransp[d]=d.Transparency; d.Transparency=1 end end
                 else
-                    handle.Transparency = invisOriginalTransp[handle] or 0
-                    for _, d in pairs(handle:GetDescendants()) do
-                        if d:IsA("BasePart") then d.Transparency = invisOriginalTransp[d] or 0 end
-                    end
+                    handle.Transparency=invisOriginalTransp[handle] or 0
+                    for _,d in pairs(handle:GetDescendants()) do if d:IsA("BasePart") then d.Transparency=invisOriginalTransp[d] or 0 end end
                 end
             end
         end
@@ -1310,22 +1447,17 @@ local function applyInvis(char, bool)
 end
 
 local function setInvisible(bool)
-    for _, c in pairs(invisConns) do pcall(function() c:Disconnect() end) end
-    invisConns = {}
-    if not bool then invisOriginalTransp = {} end
-    local char = getChar()
-    if char then applyInvis(char, bool) end
-    table.insert(invisConns, LP.CharacterAdded:Connect(function(c)
-        task.wait(0.8)
-        if invisActive then applyInvis(c, true) end
-    end))
+    for _,c in pairs(invisConns) do pcall(function() c:Disconnect() end) end
+    invisConns={}
+    if not bool then invisOriginalTransp={} end
+    local char=getChar(); if char then applyInvis(char,bool) end
+    table.insert(invisConns,LP.CharacterAdded:Connect(function(c) task.wait(0.8); if invisActive then applyInvis(c,true) end end))
     if bool then
-        table.insert(invisConns, RunService.Heartbeat:Connect(function()
-            local c = getChar()
-            if not c or not invisActive then return end
-            for _, p in pairs(c:GetDescendants()) do
-                if p:IsA("BasePart") and p.Transparency ~= 1 then p.Transparency = 1
-                elseif p:IsA("Decal") and p.Transparency ~= 1 then p.Transparency = 1 end
+        table.insert(invisConns,RunService.Heartbeat:Connect(function()
+            local c=getChar(); if not c or not invisActive then return end
+            for _,p in pairs(c:GetDescendants()) do
+                if p:IsA("BasePart") and p.Transparency~=1 then p.Transparency=1
+                elseif p:IsA("Decal") and p.Transparency~=1 then p.Transparency=1 end
             end
         end))
     end
@@ -1334,138 +1466,199 @@ end
 SecSelf:Toggle({
     Name = "Invisible (local)", Flag = "Invisible", Default = false,
     Callback = function(v)
-        invisActive = v
-        setInvisible(v)
-        notify("Invisible", v and "ON — perso transparent localement" or "OFF", 2)
+        invisActive=v; setInvisible(v)
+        notify("Invisible",v and "ON — perso transparent localement" or "OFF",2)
     end,
 })
 
--- Section Auras (droite)
-local SecAurasSelf = PageSelf:Section({ Name = "Auras", Side = 2 })
+-- ══════════════════════════════════════
+--  STAFF ICON VISIBLE / INVISIBLE LOCAL
+-- ══════════════════════════════════════
+local staffIconVisible = false
+local staffIconConns = {}
+
+local function setStaffIconForChar(char, visible)
+    if not char then return end
+
+    local head = char:FindFirstChild("Head")
+    if not head then return end
+
+    local nameTag = head:FindFirstChild("NameTag")
+    if not nameTag then return end
+
+    local frame = nameTag:FindFirstChild("Frame")
+    if not frame then return end
+
+    local icon = frame:FindFirstChild("StaffIcon")
+    if icon and icon:IsA("GuiObject") then
+        icon.Visible = visible
+    end
+end
+
+local function applyStaffIconToPlayer(plr)
+    if not plr then return end
+
+    if plr.Character then
+        setStaffIconForChar(plr.Character, staffIconVisible)
+
+        -- Petit retry car parfois le NameTag charge après le perso
+        task.delay(0.5, function()
+            if plr.Character then
+                setStaffIconForChar(plr.Character, staffIconVisible)
+            end
+        end)
+
+        task.delay(1.5, function()
+            if plr.Character then
+                setStaffIconForChar(plr.Character, staffIconVisible)
+            end
+        end)
+    end
+end
+
+local function applyStaffIconAll()
+    for _, plr in pairs(Players:GetPlayers()) do
+        applyStaffIconToPlayer(plr)
+    end
+end
+
+local function setupStaffIconWatcher()
+    for _, c in pairs(staffIconConns) do
+        pcall(function()
+            c:Disconnect()
+        end)
+    end
+    staffIconConns = {}
+
+    for _, plr in pairs(Players:GetPlayers()) do
+        table.insert(staffIconConns, plr.CharacterAdded:Connect(function(char)
+            task.wait(0.5)
+            setStaffIconForChar(char, staffIconVisible)
+
+            task.delay(1.5, function()
+                if plr.Character == char then
+                    setStaffIconForChar(char, staffIconVisible)
+                end
+            end)
+        end))
+    end
+
+    table.insert(staffIconConns, Players.PlayerAdded:Connect(function(plr)
+        table.insert(staffIconConns, plr.CharacterAdded:Connect(function(char)
+            task.wait(0.5)
+            setStaffIconForChar(char, staffIconVisible)
+
+            task.delay(1.5, function()
+                if plr.Character == char then
+                    setStaffIconForChar(char, staffIconVisible)
+                end
+            end)
+        end))
+    end))
+end
+
+setupStaffIconWatcher()
+
+SecSelf:Toggle({
+    Name = "STAFF Icon (local)",
+    Flag = "IconVisible",
+    Default = false,
+    Callback = function(v)
+        staffIconVisible = v
+        applyStaffIconAll()
+
+        notify("Staff Icon", v and "VISIBLE" or "INVISIBLE", 2)
+    end,
+})
+
+local SecAurasSelf=PageSelf:Section({Name="Auras",Side=2})
 
 SecAurasSelf:Toggle({
-    Name = "Touch Fling", Flag = "TouchFling", Default = false,
-    Callback = function(v)
+    Name="Touch Fling",Flag="TouchFling",Default=false,
+    Callback=function(v)
         if v then startTouchFling(); notify("Touch Fling","ON",2)
         else stopTouchFling(); notify("Touch Fling","OFF",2) end
     end,
 })
 
 SecAurasSelf:Toggle({
-    Name = "Void Protection", Flag = "VoidProt", Default = false,
-    Callback = function(v)
-        voidProtEnabled=v; setVoidProtection(v)
-        notify("Void Prot", v and "ON" or "OFF", 2)
-    end,
+    Name="Void Protection",Flag="VoidProt",Default=false,
+    Callback=function(v) voidProtEnabled=v; setVoidProtection(v); notify("Void Prot",v and "ON" or "OFF",2) end,
 })
 
--- Section Aimbot (droite)
-local SecAimbotSelf = PageSelf:Section({ Name = "Aimbot — F = ON/OFF", Side = 2 })
+local SecAimbotSelf=PageSelf:Section({Name="Aimbot — F = ON/OFF",Side=2})
 
 SecAimbotSelf:Toggle({
-    Name = "Aimbot Normal (F)", Flag = "AimbotToggle", Default = false,
-    Callback = function(v)
-        aimbotEnabled=v
-        if v then aimbotWallbang=false end
-        notify("Aimbot", v and "ON" or "OFF", 2)
-        updateFOVCircle()
-    end,
+    Name="Aimbot Normal (F)",Flag="AimbotToggle",Default=false,
+    Callback=function(v) aimbotEnabled=v; if v then aimbotWallbang=false end; notify("Aimbot",v and "ON" or "OFF",2); updateFOVCircle() end,
 })
 
 SecAimbotSelf:Toggle({
-    Name = "Aimbot Wallbang", Flag = "AimbotWallbang", Default = false,
-    Callback = function(v)
+    Name="Aimbot Wallbang",Flag="AimbotWallbang",Default=false,
+    Callback=function(v)
         aimbotWallbang=v
-        if v then aimbotEnabled=false; startWallbangFire()
-        else stopWallbangFire() end
-        notify("Wallbang Aimbot", v and "ON — tire a travers les murs !" or "OFF", 2)
-        updateFOVCircle()
+        if v then aimbotEnabled=false; startWallbangFire() else stopWallbangFire() end
+        notify("Wallbang Aimbot",v and "ON — tire a travers les murs !" or "OFF",2); updateFOVCircle()
     end,
 })
 
-SecAimbotSelf:Slider({
-    Name = "Wallbang Degats/tir", Flag = "WallbangDmg",
-    Min = 1, Max = 100, Default = 15, Decimals = 1,
-    Callback = function(v) wallbangDamage=v end,
-})
-
-SecAimbotSelf:Slider({
-    Name = "Wallbang Cadence (s)", Flag = "WallbangRate",
-    Min = 0.05, Max = 2, Default = 0.3, Decimals = 2,
-    Callback = function(v) wallbangRate=v end,
-})
-
-SecAimbotSelf:Toggle({
-    Name = "Afficher cercle FOV", Flag = "AimbotShowFOV", Default = true,
-    Callback = function(v) aimbotShowFOV=v; updateFOVCircle() end,
-})
-
-SecAimbotSelf:Slider({
-    Name = "Taille cercle FOV", Flag = "AimbotFOV",
-    Min = 10, Max = 800, Default = 300, Decimals = 1,
-    Callback = function(v) aimbotFOV=v; fovCircle.Radius=v; updateFOVCircle() end,
-})
-
-SecAimbotSelf:Slider({
-    Name = "Smoothing", Flag = "AimbotSmooth",
-    Min = 0, Max = 90, Default = 30, Decimals = 1,
-    Callback = function(v) aimbotSmoothing=v/100 end,
-})
-
+SecAimbotSelf:Slider({Name="Wallbang Degats/tir",Flag="WallbangDmg",Min=1,Max=100,Default=15,Decimals=1,Callback=function(v) wallbangDamage=v end})
+SecAimbotSelf:Slider({Name="Wallbang Cadence (s)",Flag="WallbangRate",Min=0.05,Max=2,Default=0.3,Decimals=2,Callback=function(v) wallbangRate=v end})
+SecAimbotSelf:Toggle({Name="Afficher cercle FOV",Flag="AimbotShowFOV",Default=true,Callback=function(v) aimbotShowFOV=v; updateFOVCircle() end})
+SecAimbotSelf:Slider({Name="Taille cercle FOV",Flag="AimbotFOV",Min=10,Max=800,Default=300,Decimals=1,Callback=function(v) aimbotFOV=v; fovCircle.Radius=v; updateFOVCircle() end})
+SecAimbotSelf:Slider({Name="Smoothing",Flag="AimbotSmooth",Min=0,Max=90,Default=30,Decimals=1,Callback=function(v) aimbotSmoothing=v/100 end})
 SecAimbotSelf:Dropdown({
-    Name = "Partie du corps", Flag = "AimbotPart",
-    Items = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" },
-    Default = "Head",
-    Callback = function(v) aimbotPart=v or "Head"; notify("Aimbot","Vise : "..aimbotPart,2) end,
+    Name="Partie du corps",Flag="AimbotPart",
+    Items={"Head","HumanoidRootPart","UpperTorso","LowerTorso"},Default="Head",
+    Callback=function(v) aimbotPart=v or "Head"; notify("Aimbot","Vise : "..aimbotPart,2) end,
 })
 
 -- ── PAGE 2 : ONLINE ───────────────────────────────────────────
-local PageOnline = Window:Page({ Icon = "rbxassetid://113707798651034" })
+local PageOnline=Window:Page({Icon="rbxassetid://113707798651034"})
+local SecTarget=PageOnline:Section({Name="Cible & Actions",Side=1})
 
-local SecTarget = PageOnline:Section({ Name = "Cible & Actions", Side = 1 })
+local selectedTarget=nil; local targetDropdown=nil
 
-local selectedTarget = nil
-local targetDropdown = nil
-
-local function getSortedPlayerNames()
-    local names={}
-    for _, p in pairs(Players:GetPlayers()) do if p~=LP then table.insert(names,p.Name) end end
-    table.sort(names,function(a,b) return a:lower()<b:lower() end)
+local function getPlayersByDistance()
+    local myRoot=getHRP(); local list={}
+    for _,p in pairs(Players:GetPlayers()) do
+        if p~=LP then
+            local dist=math.huge
+            if myRoot and p.Character then
+                local hrp=p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then dist=(hrp.Position-myRoot.Position).Magnitude end
+            end
+            table.insert(list,{name=p.Name,dist=dist})
+        end
+    end
+    table.sort(list,function(a,b) return a.dist<b.dist end)
+    local names={}; for _,e in ipairs(list) do table.insert(names,e.name) end
     return names
 end
 
 local function refreshDropdown()
-    local newNames=getSortedPlayerNames()
-    local values=#newNames>0 and newNames or {"(aucun joueur)"}
+    local names=getPlayersByDistance()
+    local values=#names>0 and names or {"(aucun joueur)"}
     pcall(function() targetDropdown:Refresh(values) end)
 end
 
-local initNames=getSortedPlayerNames()
-targetDropdown = SecTarget:Dropdown({
-    Name = "Sélectionner un joueur", Flag = "TargetPlayer",
-    Items = #initNames>0 and initNames or {"(aucun joueur)"},
-    Default = initNames[1] or "(aucun joueur)",
-    Callback = function(v)
-        selectedTarget=Players:FindFirstChild(v)
-        notify("Cible", v and ("Cible : "..v) or "Aucun", 2)
-    end,
+local initNames=getPlayersByDistance()
+targetDropdown=SecTarget:Dropdown({
+    Name="Sélectionner un joueur",Flag="TargetPlayer",
+    Items=#initNames>0 and initNames or {"(aucun joueur)"},
+    Default=initNames[1] or "(aucun joueur)",
+    Callback=function(v) selectedTarget=Players:FindFirstChild(v); notify("Cible",v and ("Cible : "..v) or "Aucun",2) end,
 })
 
 Players.PlayerAdded:Connect(function(p) task.wait(0.5); refreshDropdown() end)
-Players.PlayerRemoving:Connect(function(p)
-    if selectedTarget==p then selectedTarget=nil end
-    task.wait(0.1); refreshDropdown()
-end)
-task.spawn(function() while true do task.wait(3); refreshDropdown() end end)
+Players.PlayerRemoving:Connect(function(p) if selectedTarget==p then selectedTarget=nil end; task.wait(0.1); refreshDropdown() end)
+task.spawn(function() while true do task.wait(2); refreshDropdown() end end)
+
+SecTarget:Button({Name="Refresh joueurs (distance)",Callback=function() refreshDropdown(); notify("Refresh","Liste triée par distance !",2) end})
 
 SecTarget:Button({
-    Name = "Refresh joueurs",
-    Callback = function() refreshDropdown(); notify("Refresh","Liste mise à jour !",2) end,
-})
-
-SecTarget:Button({
-    Name = "TP → Joueur sélectionné",
-    Callback = function()
+    Name="TP → Joueur sélectionné",
+    Callback=function()
         if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
         local m=getHRP(); local r=selectedTarget.Character and selectedTarget.Character:FindFirstChild("HumanoidRootPart")
         if m and r then m.CFrame=r.CFrame+Vector3.new(0,3,2); notify("TP","→ "..selectedTarget.Name,2)
@@ -1474,10 +1667,10 @@ SecTarget:Button({
 })
 
 SecTarget:Button({
-    Name = "KILL joueur",
-    Callback = function()
+    Name="KILL joueur",
+    Callback=function()
         if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
-        local ok, remote = pcall(function()
+        local ok,remote=pcall(function()
             return game:GetService("ReplicatedStorage"):WaitForChild("Locker",3):WaitForChild("Civil",3):WaitForChild("Bat",3):WaitForChild("ExtraScripts",3):WaitForChild("DamageEvent",3)
         end)
         if not ok or not remote then notify("Erreur","DamageEvent introuvable !",3) return end
@@ -1492,8 +1685,8 @@ SecTarget:Button({
 
 local spectateConn=nil; local spectating=false
 SecTarget:Toggle({
-    Name = "Spectate joueur", Flag = "SpectateToggle", Default = false,
-    Callback = function(v)
+    Name="Spectate joueur",Flag="SpectateToggle",Default=false,
+    Callback=function(v)
         spectating=v
         if spectateConn then spectateConn:Disconnect(); spectateConn=nil end
         if v then
@@ -1506,62 +1699,68 @@ SecTarget:Toggle({
                 local hrp=target.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then cam.CFrame=CFrame.new(hrp.Position+Vector3.new(0,5,-10),hrp.Position) end
             end)
-        else
-            local cam=getCam(); cam.CameraType=Enum.CameraType.Custom; notify("Spectate","OFF",2)
-        end
+        else local cam=getCam(); cam.CameraType=Enum.CameraType.Custom; notify("Spectate","OFF",2) end
     end,
 })
 
 SecTarget:Toggle({
-    Name = "Orbit Player", Flag = "OrbitPlayer", Default = false,
-    Callback = function(v)
-        if v then
-            if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
-            startOrbit(selectedTarget)
+    Name="Orbit Player",Flag="OrbitPlayer",Default=false,
+    Callback=function(v)
+        if v then if not selectedTarget then notify("Erreur","Aucune cible !",2) return end; startOrbit(selectedTarget)
         else stopOrbit() end
     end,
 })
 
-SecTarget:Slider({
-    Name = "Orbit Rayon", Flag = "OrbitRadius",
-    Min = 2, Max = 30, Default = 6, Decimals = 1,
-    Callback = function(v) orbitRadius=v end,
-})
+SecTarget:Slider({Name="Orbit Rayon",Flag="OrbitRadius",Min=2,Max=30,Default=6,Decimals=1,Callback=function(v) orbitRadius=v end})
+SecTarget:Slider({Name="Orbit Vitesse",Flag="OrbitSpeed",Min=0.1,Max=10,Default=1.5,Decimals=1,Callback=function(v) orbitSpeed=v end})
 
-SecTarget:Slider({
-    Name = "Orbit Vitesse", Flag = "OrbitSpeed",
-    Min = 0.1, Max = 10, Default = 1.5, Decimals = 1,
-    Callback = function(v) orbitSpeed=v end,
-})
+-- Section TP Car, Vehicle Fly & CarFuck (droite)
+local SecCar=PageOnline:Section({Name="TP Car & Vehicle Fly",Side=2})
 
--- Section TP Car & CarFuck (droite)
-local SecCar = PageOnline:Section({ Name = "TP Car & CarFuck", Side = 2 })
-
--- ── Vehicle Speed ────────────────────────────────────────────
+-- ── Vehicle Speed ─────────────────────────────────────────────
 SecCar:Slider({
-    Name = "Vehicle Speed", Flag = "VehicleSpeed",
-    Min = 10, Max = 1000, Default = 100, Decimals = 1,
-    Callback = function(v)
-        applyVehicleSpeed(v)
-        notify("Vehicle Speed", v.." MaxSpeed appliqué !", 1, 0.5)
-    end,
+    Name="Vehicle Speed",Flag="VehicleSpeed",Min=10,Max=1000,Default=100,Decimals=1,
+    Callback=function(v) applyVehicleSpeed(v); notify("Vehicle Speed",v.." MaxSpeed appliqué !",1,0.5) end,
 })
 
 SecCar:Button({
-    Name = "Appliquer Vehicle Speed",
-    Callback = function()
+    Name="Appliquer Vehicle Speed",
+    Callback=function()
         if not detectedVehicle or not detectedVehicle.Parent then
             if not detectVehicle() then notify("Erreur","Aucun véhicule détecté !",3) return end
         end
         applyVehicleSpeed(vehicleSpeed)
-        notify("Vehicle Speed", vehicleSpeed.." appliqué sur "..detectedVehicle.Name.." !",3)
+        notify("Vehicle Speed",vehicleSpeed.." appliqué sur "..detectedVehicle.Name.." !",3)
     end,
 })
 
+-- ── Vehicle Fly ───────────────────────────────────────────────
+SecCar:Toggle({
+    Name="Vehicle Fly (RightCtrl)",Flag="VehFly",Default=false,
+    Callback=function(v)
+        if v then
+            startVehFly()
+            -- Si startVehFly a échoué (pas de véhicule), le toggle reste mais vehFlyActive=false
+        else
+            if vehFlyActive then stopVehFly() end
+        end
+    end,
+})
+
+SecCar:Slider({
+    Name="Veh Fly Speed",Flag="VehFlySpeed",
+    Min=10,Max=500,Default=60,Decimals=1,
+    Callback=function(v)
+        vehFlySpeed=v
+        notify("Veh Fly Speed",v.." st/s",1,0.8)
+    end,
+})
+
+-- ── TP Car & CARFUCK ──────────────────────────────────────────
 local carsAttackActive=false
 SecCar:Button({
-    Name = "TP (car) sur la cible !",
-    Callback = function()
+    Name="TP (car) sur la cible !",
+    Callback=function()
         if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
         if not detectedVehicle or not detectedVehicle.Parent then if not detectVehicle() then notify("Erreur","Aucun véhicule détecté !",3) return end end
         carsAttackActive=not carsAttackActive
@@ -1581,8 +1780,8 @@ SecCar:Button({
 
 local carFuckActive=false; local carFuckInterval=0.4
 SecCar:Button({
-    Name = "CARFUCK !",
-    Callback = function()
+    Name="CARFUCK !",
+    Callback=function()
         if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
         if not detectedVehicle or not detectedVehicle.Parent then if not detectVehicle() then notify("Erreur","Aucun véhicule !",3) return end end
         carFuckActive=not carFuckActive
@@ -1608,18 +1807,16 @@ SecCar:Button({
 })
 
 SecCar:Slider({
-    Name = "Vitesse CARFUCK", Flag = "CarFuckSpeed",
-    Min = 1, Max = 20, Default = 4, Decimals = 1,
-    Callback = function(v) carFuckInterval=v/10; notify("CARFUCK","Intervalle : "..carFuckInterval.."s",1,0.5) end,
+    Name="Vitesse CARFUCK",Flag="CarFuckSpeed",Min=1,Max=20,Default=4,Decimals=1,
+    Callback=function(v) carFuckInterval=v/10; notify("CARFUCK","Intervalle : "..carFuckInterval.."s",1,0.5) end,
 })
 
--- Section LIMBAR (droite)
-local SecLimbar = PageOnline:Section({ Name = "LIMBAR PLAYERS", Side = 2 })
+local SecLimbar=PageOnline:Section({Name="LIMBAR PLAYERS",Side=2})
 
 local limbarActive=false
 SecLimbar:Button({
-    Name = "LIMBAR PLAYERS !",
-    Callback = function()
+    Name="LIMBAR PLAYERS !",
+    Callback=function()
         if not selectedTarget then notify("Erreur","Aucune cible !",2) return end
         if limbarActive then notify("Erreur","LIMBAR déjà en cours !",2) return end
         local target=selectedTarget; limbarActive=true
@@ -1640,22 +1837,21 @@ SecLimbar:Button({
 })
 
 SecLimbar:Button({
-    Name = "Stop LIMBAR",
-    Callback = function()
+    Name="Stop LIMBAR",
+    Callback=function()
         if limbarActive then limbarActive=false; stopTouchFling(); notify("LIMBAR","Arrêté manuellement.",2)
         else notify("LIMBAR","LIMBAR n'est pas actif.",2) end
     end,
 })
 
 -- ── PAGE 3 : TELEPORT ─────────────────────────────────────────
-local PageTP = Window:Page({ Icon = "rbxassetid://137783165137735" })
-
-local SecTPClic = PageTP:Section({ Name = "TP Clic", Side = 1 })
+local PageTP=Window:Page({Icon="rbxassetid://137783165137735"})
+local SecTPClic=PageTP:Section({Name="TP Clic",Side=1})
 
 local tpClicEnabled=false; local tpClicConn=nil
 SecTPClic:Toggle({
-    Name = "TP Clic ON/OFF", Flag = "TpClic", Default = false,
-    Callback = function(v)
+    Name="TP Clic ON/OFF",Flag="TpClic",Default=false,
+    Callback=function(v)
         tpClicEnabled=v
         if tpClicConn then tpClicConn:Disconnect(); tpClicConn=nil end
         if v then
@@ -1670,21 +1866,176 @@ SecTPClic:Toggle({
     end,
 })
 
-SecTPClic:Button({
-    Name = "TP au Spawn",
-    Callback = function()
-        local m=getHRP(); local s=workspace:FindFirstChildOfClass("SpawnLocation")
-        if m and s then m.CFrame=s.CFrame+Vector3.new(0,5,0); notify("Spawn","Téléporté au spawn !",2)
-        else notify("Spawn","Spawn introuvable !",2) end
+-- ══════════════════════════════════════
+--  TP SPAWN ZONES PLAYER
+-- ══════════════════════════════════════
+local function tpToSpawnZone(zoneNumber)
+    local myRoot = getHRP()
+    if not myRoot then
+        notify("Spawn "..zoneNumber, "Personnage introuvable !", 2)
+        return
+    end
+
+    local systems = workspace:FindFirstChild("Systems")
+    local spawnZones = systems and systems:FindFirstChild("SpawnZones")
+    local zone = spawnZones and spawnZones:FindFirstChild("Zone"..zoneNumber)
+    local playerFolder = zone and zone:FindFirstChild("PLAYER")
+
+    if not playerFolder then
+        notify("Spawn "..zoneNumber, "Zone"..zoneNumber..".PLAYER introuvable !", 2)
+        return
+    end
+
+    local spawns = {}
+
+    for _, obj in pairs(playerFolder:GetDescendants()) do
+        if obj:IsA("SpawnLocation") or (obj:IsA("BasePart") and obj.Name == "SpawnLocation") then
+            table.insert(spawns, obj)
+        end
+    end
+
+    if #spawns == 0 then
+        notify("Spawn "..zoneNumber, "Trop loin : spawn non chargé", 2)
+        return
+    end
+
+    local chosenSpawn = spawns[math.random(1, #spawns)]
+    myRoot.CFrame = chosenSpawn.CFrame + Vector3.new(0, 5, 0)
+
+    notify("Spawn "..zoneNumber, "Téléporté !", 2)
+end
+
+-- ══════════════════════════════════════
+--  CHOIX SPAWN ZONE
+-- ══════════════════════════════════════
+local spawnDropdownReady = false
+
+local function tpToSpawnZone(zoneNumber)
+    local myRoot = getHRP()
+    if not myRoot then
+        notify("Spawn "..zoneNumber, "Personnage introuvable !", 2)
+        return
+    end
+
+    local systems = workspace:FindFirstChild("Systems")
+    local spawnZones = systems and systems:FindFirstChild("SpawnZones")
+    local zone = spawnZones and spawnZones:FindFirstChild("Zone"..zoneNumber)
+    local playerFolder = zone and zone:FindFirstChild("PLAYER")
+
+    if not playerFolder then
+        notify("Spawn "..zoneNumber, "Zone"..zoneNumber..".PLAYER introuvable !", 2)
+        return
+    end
+
+    local spawns = {}
+
+    for _, obj in pairs(playerFolder:GetDescendants()) do
+        if obj:IsA("SpawnLocation") or (obj:IsA("BasePart") and obj.Name == "SpawnLocation") then
+            table.insert(spawns, obj)
+        end
+    end
+
+    if #spawns == 0 then
+        notify("Spawn "..zoneNumber, "Trop loin : spawn non chargé", 2)
+        return
+    end
+
+    local chosenSpawn = spawns[math.random(1, #spawns)]
+    myRoot.CFrame = chosenSpawn.CFrame + Vector3.new(0, 5, 0)
+
+    notify("Spawn "..zoneNumber, "Téléporté !", 2)
+end
+
+local SpawnNames = {
+    ["Fontaine"] = 1,
+    ["PN"] = 2,
+    ["DOCP"] = 3,
+    ["Banque"] = 4,
+    ["Musée"] = 5,
+}
+
+SecTPClic:Dropdown({
+    Name = "Choisir un Spawn",
+    Flag = "SpawnZoneChoice",
+    Items = { "Fontaine", "PN", "DOCP", "Banque", "Musée" },
+    Default = "Fontaine",
+    Callback = function(v)
+        if not spawnDropdownReady then return end
+
+        local zoneNumber = SpawnNames[tostring(v)]
+        if not zoneNumber then
+            notify("Spawn", "Choix invalide !", 2)
+            return
+        end
+
+        tpToSpawnZone(zoneNumber)
     end,
 })
 
-local SecVehTP = PageTP:Section({ Name = "TP Véhicule au clic", Side = 2 })
+task.defer(function()
+    spawnDropdownReady = true
+end)
+
+SecTPClic:Button({
+    Name="TP Vendeur arme",
+    Callback=function()
+        local myRoot = getHRP()
+        if not myRoot then
+            notify("TP Vendeur", "Personnage introuvable !", 2)
+            return
+        end
+
+        local pnjFolder = workspace:FindFirstChild("Systems")
+            and workspace.Systems:FindFirstChild("PNJ")
+
+        if not pnjFolder then
+            notify("TP Vendeur", "Dossier PNJ introuvable !", 2)
+            return
+        end
+
+        local closestPNJ = nil
+        local closestDist = math.huge
+
+        for _, pnj in pairs(pnjFolder:GetChildren()) do
+            if pnj.Name == "PNJ Vendeur" then
+                local part = nil
+
+                if pnj:IsA("Model") then
+                    part = pnj:FindFirstChild("HumanoidRootPart")
+                        or pnj.PrimaryPart
+                        or pnj:FindFirstChildWhichIsA("BasePart", true)
+                elseif pnj:IsA("BasePart") then
+                    part = pnj
+                end
+
+                if part then
+                    local dist = (myRoot.Position - part.Position).Magnitude
+
+                    if dist < closestDist then
+                        closestDist = dist
+                        closestPNJ = part
+                    end
+                end
+            end
+        end
+
+        if not closestPNJ then
+            notify("TP Vendeur", "Aucun PNJ Vendeur trouvé !", 2)
+            return
+        end
+
+        myRoot.CFrame = CFrame.new(closestPNJ.Position + Vector3.new(0, 3, 0))
+        notify("TP Vendeur", "Téléporté au vendeur arme !", 2)
+    end,
+})
+
+
+local SecVehTP=PageTP:Section({Name="TP Véhicule au clic",Side=2})
 
 local vehTPEnabled=false; local vehTPConn=nil
 SecVehTP:Toggle({
-    Name = "TP Véhicule au clic", Flag = "VehTP", Default = false,
-    Callback = function(v)
+    Name="TP Véhicule au clic",Flag="VehTP",Default=false,
+    Callback=function(v)
         vehTPEnabled=v
         if vehTPConn then vehTPConn:Disconnect(); vehTPConn=nil end
         if v then
@@ -1710,51 +2061,56 @@ SecVehTP:Toggle({
 })
 
 -- ── PAGE 4 : VISUAL ───────────────────────────────────────────
-local PageVisual = Window:Page({ Icon = "rbxassetid://85403342431888" })
-
-local SecESPMaster = PageVisual:Section({ Name = "TrackAll — Master", Side = 1 })
+local PageVisual=Window:Page({Icon="rbxassetid://85403342431888"})
+local SecESPMaster=PageVisual:Section({Name="TrackAll — Master",Side=1})
 
 SecESPMaster:Toggle({
-    Name = "TrackAll ON/OFF", Flag = "TrackAll", Default = false,
-    Callback = function(v)
+    Name="TrackAll ON/OFF",Flag="TrackAll",Default=false,
+    Callback=function(v)
         trackOn=v
-        if v then for _, p in pairs(Players:GetPlayers()) do addESP(p) end; notify("TrackAll","ON",2)
-        else for _, p in pairs(Players:GetPlayers()) do cleanESP(p) end; notify("TrackAll","OFF",2) end
+        if v then
+            for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
+            notify("TrackAll","ON",2)
+        else
+            for _,p in pairs(Players:GetPlayers()) do cleanESP(p) end
+            notify("TrackAll","OFF",2)
+        end
     end,
 })
 
-SecESPMaster:Slider({
-    Name = "Distance max ESP", Flag = "ESPMaxDist",
-    Min = 10, Max = 5000, Default = 1000, Decimals = 1,
-    Callback = function(v) espMaxDistance=v; notify("ESP Distance","Affiche jusqu'à "..v.."m",1,0.8) end,
-})
+SecESPMaster:Slider({Name="Distance max ESP",Flag="ESPMaxDist",Min=10,Max=5000,Default=1000,Decimals=1,Callback=function(v) espMaxDistance=v; notify("ESP Distance","Affiche jusqu'à "..v.."m",1,0.8) end})
 
 SecESPMaster:Button({
-    Name = "Refresh manuel",
-    Callback = function()
+    Name="Refresh manuel ESP",
+    Callback=function()
         if not trackOn then notify("Erreur","Active TrackAll d'abord !",2) return end
-        for _, p in pairs(Players:GetPlayers()) do cleanESP(p) end
-        task.wait(0.3); for _, p in pairs(Players:GetPlayers()) do addESP(p) end
+        for _,p in pairs(Players:GetPlayers()) do cleanESP(p) end
+        task.wait(0.3)
+        for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
         notify("ESP","Rafraîchi !",2)
     end,
 })
 
-SecESPMaster:Toggle({ Name="Skeleton ESP", Flag="ESPSkeleton", Default=true, Callback=function(v) espOptions.skeleton=v end })
-SecESPMaster:Toggle({ Name="Box ESP", Flag="ESPBox", Default=true, Callback=function(v) espOptions.box=v; if not v then for _,obj in pairs(espObjects) do if obj.boxDrawing then obj.boxDrawing.Visible=false end end end end })
-SecESPMaster:Toggle({ Name="Health ESP", Flag="ESPHealth", Default=true, Callback=function(v) espOptions.health=v end })
-SecESPMaster:Toggle({ Name="Name ESP", Flag="ESPName", Default=true, Callback=function(v) espOptions.name=v end })
-SecESPMaster:Toggle({ Name="Distance ESP", Flag="ESPDist", Default=true, Callback=function(v) espOptions.distance=v end })
+SecESPMaster:Toggle({Name="Skeleton ESP",Flag="ESPSkeleton",Default=true,Callback=function(v) espOptions.skeleton=v end})
+SecESPMaster:Toggle({Name="Box ESP",Flag="ESPBox",Default=true,Callback=function(v) espOptions.box=v; if not v then for _,obj in pairs(espObjects) do if obj.boxDrawing then obj.boxDrawing.Visible=false end end end end})
+SecESPMaster:Toggle({Name="Health ESP",Flag="ESPHealth",Default=true,Callback=function(v) espOptions.health=v end})
+SecESPMaster:Toggle({Name="Name ESP",Flag="ESPName",Default=true,Callback=function(v) espOptions.name=v end})
+SecESPMaster:Toggle({Name="Distance ESP",Flag="ESPDist",Default=true,Callback=function(v) espOptions.distance=v end})
 
 SecESPMaster:Toggle({
-    Name = "STAFF Detect", Flag = "STAFFDetect", Default = false,
-    Callback = function(v)
+    Name="STAFF Detect",Flag="STAFFDetect",Default=false,
+    Callback=function(v)
         STAFFDetectOn=v
         if v then
-            if not trackOn then trackOn=true; for _, p in pairs(Players:GetPlayers()) do addESP(p) end; notify("TrackAll","Activé automatiquement",2) end
+            if not trackOn then
+                trackOn=true
+                for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
+                notify("TrackAll","Activé automatiquement",2)
+            end
             playerSnapshots={}; notify("STAFF Detect","ON",3)
         else
             notify("STAFF Detect","OFF",2)
-            for _, plr in pairs(Players:GetPlayers()) do
+            for _,plr in pairs(Players:GetPlayers()) do
                 local obj=espObjects[plr.Name]
                 if obj and obj.highlight and obj.highlight.Parent then
                     obj.highlight.FillColor=Color3.fromRGB(255,255,255); obj.highlight.OutlineColor=Color3.fromRGB(255,255,255)
@@ -1765,30 +2121,21 @@ SecESPMaster:Toggle({
     end,
 })
 
-local SecLighting = PageVisual:Section({ Name = "Lighting", Side = 2 })
+local SecLighting=PageVisual:Section({Name="Lighting",Side=2})
 
+SecLighting:Toggle({Name="Remove Fog",Flag="NoFog",Default=false,Callback=function(v) Lighting.FogEnd=v and 1e6 or 1000; Lighting.FogStart=v and 1e6 or 0 end})
 SecLighting:Toggle({
-    Name = "Remove Fog", Flag = "NoFog", Default = false,
-    Callback = function(v) Lighting.FogEnd=v and 1e6 or 1000; Lighting.FogStart=v and 1e6 or 0 end,
-})
-
-SecLighting:Toggle({
-    Name = "Fullbright", Flag = "Fullbright", Default = false,
-    Callback = function(v)
+    Name="Fullbright",Flag="Fullbright",Default=false,
+    Callback=function(v)
         Lighting.Brightness=v and 10 or 1; Lighting.ClockTime=v and 14 or 12
         Lighting.Ambient=v and Color3.fromRGB(255,255,255) or Color3.fromRGB(70,70,70)
     end,
 })
+SecLighting:Slider({Name="FOV",Flag="FOV",Min=60,Max=120,Default=70,Decimals=1,Callback=function(v) getCam().FieldOfView=v end})
 
-SecLighting:Slider({
-    Name = "FOV", Flag = "FOV",
-    Min = 60, Max = 120, Default = 70, Decimals = 1,
-    Callback = function(v) getCam().FieldOfView=v end,
-})
+local SecAnim=PageVisual:Section({Name="Animations",Side=2})
 
-local SecAnim = PageVisual:Section({ Name = "Animations", Side = 2 })
-
-local ANIMS = {{"Robot Dance","507766388"},{"Floss","5915693312"},{"Samba","507776879"},{"Wave","507770239"},
+local ANIMS={{"Robot Dance","507766388"},{"Floss","5915693312"},{"Samba","507776879"},{"Wave","507770239"},
     {"Laugh","507770818"},{"Cheer","507770677"},{"Sleep","507771019"},{"Air Guitar","182453160"},
     {"Too Cool","507769051"},{"Roar","507761307"}}
 
@@ -1805,71 +2152,44 @@ local function playAnim(id)
 end
 
 local animValues={}
-for _, a in ipairs(ANIMS) do table.insert(animValues,a[1]) end
+for _,a in ipairs(ANIMS) do table.insert(animValues,a[1]) end
 
-SecAnim:Dropdown({
-    Name = "Choisir une animation", Flag = "AnimSelect",
-    Items = animValues, Default = animValues[1],
-    Callback = function(v) for _, a in ipairs(ANIMS) do if a[1]==v then playAnim(a[2]); break end end end,
-})
-
-SecAnim:Button({
-    Name = "Stop l'animation",
-    Callback = function()
-        if currentAnim then pcall(function() currentAnim:Stop() end); currentAnim=nil; notify("Animation","Arrêtée",2)
-        else notify("Animation","Aucune anim en cours",2) end
-    end,
-})
-
-SecAnim:Textbox({
-    Name = "ID Custom", Flag = "CustomAnim",
-    Placeholder = "507766388", Finished = true,
-    Callback = function(id) if id and id~="" then playAnim(id) end end,
-})
+SecAnim:Dropdown({Name="Choisir une animation",Flag="AnimSelect",Items=animValues,Default=animValues[1],
+    Callback=function(v) for _,a in ipairs(ANIMS) do if a[1]==v then playAnim(a[2]); break end end end})
+SecAnim:Button({Name="Stop l'animation",Callback=function()
+    if currentAnim then pcall(function() currentAnim:Stop() end); currentAnim=nil; notify("Animation","Arrêtée",2)
+    else notify("Animation","Aucune anim en cours",2) end
+end})
+SecAnim:Textbox({Name="ID Custom",Flag="CustomAnim",Placeholder="507766388",Finished=true,
+    Callback=function(id) if id and id~="" then playAnim(id) end end})
 
 -- ── PAGE 5 : MISC ─────────────────────────────────────────────
-local PageMisc = Window:Page({ Icon = "rbxassetid://133965452418408" })
-
-local SecMusic = PageMisc:Section({ Name = "Musique", Side = 1 })
+local PageMisc=Window:Page({Icon="rbxassetid://133965452418408"})
+local SecMusic=PageMisc:Section({Name="Musique",Side=1})
 
 SecMusic:Toggle({
-    Name = "Musique ON/OFF", Flag = "MusicToggle", Default = true,
-    Callback = function(v)
-        if v then bgMusic:Play(); notify("Musique","ON",2) else bgMusic:Stop(); notify("Musique","OFF",2) end
-    end,
+    Name="Musique ON/OFF",Flag="MusicToggle",Default=true,
+    Callback=function(v) if v then bgMusic:Play(); notify("Musique","ON",2) else bgMusic:Stop(); notify("Musique","OFF",2) end end,
 })
+SecMusic:Slider({Name="Volume",Flag="MusicVolume",Min=0,Max=100,Default=50,Decimals=1,
+    Callback=function(v) bgMusic.Volume=v/100; notify("Volume",v.."%",1,0.6) end})
 
-SecMusic:Slider({
-    Name = "Volume", Flag = "MusicVolume",
-    Min = 0, Max = 100, Default = 50, Decimals = 1,
-    Callback = function(v) bgMusic.Volume=v/100; notify("Volume",v.."%",1,0.6) end,
-})
+local SecScripts=PageMisc:Section({Name="Scripts externes",Side=2})
 
-local SecScripts = PageMisc:Section({ Name = "Scripts externes", Side = 2 })
+SecScripts:Button({Name="SystemBroken",Callback=function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/GZSSF/script3/95a45577475502cfbf546ae9ca8fc4f00b61eb83/script3"))()
+    notify("Scripts","SystemBroken exécuté !",2)
+end})
 
-SecScripts:Button({
-    Name = "SystemBroken",
-    Callback = function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/GZSSF/script3/95a45577475502cfbf546ae9ca8fc4f00b61eb83/script3"))()
-        notify("Scripts","SystemBroken exécuté !",2)
-    end,
-})
+SecScripts:Button({Name="Infinite Yield",Callback=function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
+    notify("Scripts","Infinite Yield exécuté !",2)
+end})
 
-SecScripts:Button({
-    Name = "Infinite Yield",
-    Callback = function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
-        notify("Scripts","Infinite Yield exécuté !",2)
-    end,
-})
-
-SecScripts:Button({
-    Name = "DEX Explorer",
-    Callback = function()
-          loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-dex-explorer-fixed-for-velocity-236826"))()
-        notify("Scripts","DEX executé !",2)
-    end,
-})
+SecScripts:Button({Name="DEX Explorer",Callback=function()
+    loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-dex-explorer-fixed-for-velocity-236826"))()
+    notify("Scripts","DEX exécuté !",2)
+end})
 
 -- ══════════════════════════════════════
 --  INIT
@@ -1879,4 +2199,4 @@ do
     LP.Idled:Connect(function() VU:Button2Down(Vector2.zero,getCam().CFrame); task.wait(1); VU:Button2Up(Vector2.zero,getCam().CFrame) end)
 end
 
-notify("Panel Wars", "Menu chargé ! — By FocusOnTop | Numpad8 = Freecam", 5)
+notify("Panel Wars","Menu chargé ! — By FocusOnTop | Numpad8 = Freecam | RightCtrl = Veh Fly",5)
