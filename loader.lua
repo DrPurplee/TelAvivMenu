@@ -23,6 +23,7 @@ local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS        = game:GetService("UserInputService")
 local Lighting   = game:GetService("Lighting")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP         = Players.LocalPlayer
 
 local function getChar() return LP.Character end
@@ -641,58 +642,192 @@ runAimbot()
 -- ══════════════════════════════════════════════════════════════
 --  ESP / TRACKALL  — VERSION ROBUSTE
 -- ══════════════════════════════════════════════════════════════
-local espOptions = { skeleton = true, box = true, health = true, name = true, distance = true }
+local espOptions = { health = true, name = true, distance = true }
 local espMaxDistance = 1000
 local trackOn        = false
 local STAFFDetectOn  = false
 local playerSnapshots = {}
+staffLocked     = staffLocked or {}
 local espObjects      = {}
+local espPending      = {}
+local ensureESP       = nil
 
-local SKELETON_BONES = {
-    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},{"LowerTorso","LeftUpperLeg"},
-    {"LowerTorso","RightUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"RightUpperLeg","RightLowerLeg"},
-    {"LeftLowerLeg","LeftFoot"},{"RightLowerLeg","RightFoot"},{"UpperTorso","LeftUpperArm"},
-    {"UpperTorso","RightUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"RightUpperArm","RightLowerArm"},
-    {"LeftLowerArm","LeftHand"},{"RightLowerArm","RightHand"},
-}
-
-local function newLine()
-    local l = Drawing.new("Line"); l.Visible=false; l.Color=Color3.fromRGB(255,255,255)
-    l.Thickness=1.5; l.Transparency=1; l.ZIndex=5; return l
-end
-local function newBox()
-    local b = Drawing.new("Square"); b.Visible=false; b.Color=Color3.fromRGB(255,255,255)
-    b.Thickness=1.5; b.Filled=false; b.Transparency=1; b.ZIndex=4; return b
+function isInfValue(v)
+    return v == math.huge or v == -math.huge or v ~= v or tostring(v):lower():find("inf") ~= nil or v > 1e20
 end
 
-local function isSuspectedSTAFF(plr)
+function isInfHumanoid(hum)
+    if not hum then return false end
+    return isInfValue(hum.Health) or isInfValue(hum.MaxHealth)
+end
+
+function formatHumanoidHP(hum)
+    if not hum then
+        return "0/0"
+    end
+
+    if isInfHumanoid(hum) then
+        return "inf/inf"
+    end
+
+    return tostring(math.floor(hum.Health)) .. "/" .. tostring(math.floor(hum.MaxHealth))
+end
+
+function isSuspectedSTAFF(plr)
+    if staffLocked[plr.Name] then
+        return true
+    end
+
     if not plr.Character then return false end
-    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+
+    local char = plr.Character
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+
     if not hrp or not hum then return false end
-    local snap = playerSnapshots[plr.Name]
-    if not snap then
-        playerSnapshots[plr.Name] = {lastPos=hrp.Position,lastHP=hum.Health,highSpeedFrames=0,godmodFrames=0,totalFrames=0}
+
+    -- Anti faux positif mort / respawn : on ne détecte jamais un joueur mort.
+    if hum.Health <= 0 and not isInfHumanoid(hum) then
+        playerSnapshots[plr.Name] = nil
         return false
     end
+
+    local now = tick()
+    local snap = playerSnapshots[plr.Name]
+
+    if not snap then
+        playerSnapshots[plr.Name] = {
+            lastPos = hrp.Position,
+            lastHP = hum.Health,
+            lastT = now,
+            highSpeedFrames = 0,
+            godmodFrames = 0,
+            airFlyFrames = 0,
+            invisibleFrames = 0,
+            flyEvidence = false,
+            totalFrames = 0,
+        }
+
+        return false
+    end
+
     snap.totalFrames += 1
-    local dist = (hrp.Position - snap.lastPos).Magnitude
-    if dist > 80 then snap.highSpeedFrames += 1 else snap.highSpeedFrames = math.max(0, snap.highSpeedFrames - 1) end
-    local isSTAFF = snap.highSpeedFrames >= 5
-    if snap.lastHP < hum.MaxHealth * 0.5 and hum.Health == hum.MaxHealth then snap.godmodFrames += 1 else snap.godmodFrames = math.max(0, snap.godmodFrames - 0.5) end
-    if snap.godmodFrames >= 3 then isSTAFF = true end
-    snap.lastPos = hrp.Position; snap.lastHP = hum.Health
-    return isSTAFF
+
+    local dt = math.max(now - (snap.lastT or now), 0.05)
+    local delta = hrp.Position - snap.lastPos
+    local dist = delta.Magnitude
+    local horizontalDist = Vector3.new(delta.X, 0, delta.Z).Magnitude
+    local verticalDelta = delta.Y
+    local speed = dist / dt
+
+    local seated = hum.SeatPart ~= nil
+    local stateName = tostring(hum:GetState())
+    local airborne = hum.FloorMaterial == Enum.Material.Air
+    local flyingState = stateName:lower():find("flying") ~= nil
+
+    -- Détection invisibilité réelle : ignore HumanoidRootPart pour éviter les faux positifs.
+    local totalParts = 0
+    local visibleParts = 0
+
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+            totalParts += 1
+            local transparency = math.max(d.Transparency, d.LocalTransparencyModifier)
+            if transparency < 0.88 then
+                visibleParts += 1
+            end
+        end
+    end
+
+    local invisible = totalParts > 0 and (visibleParts / totalParts) <= 0.15
+
+    if invisible then
+        snap.invisibleFrames += 1
+    else
+        snap.invisibleFrames = math.max(0, snap.invisibleFrames - 2)
+    end
+
+    -- Preuve de fly : il doit avoir volé / bougé anormalement en l'air au moins une fois.
+    -- Ça évite de tag STAFF juste parce que le perso meurt, respawn ou devient transparent brièvement.
+    local flyLike = false
+
+    if not seated then
+        if flyingState then
+            flyLike = true
+        elseif airborne and speed > 35 and (horizontalDist > 3 or math.abs(verticalDelta) > 2.5) then
+            flyLike = true
+        elseif speed > 115 or dist > 70 then
+            flyLike = true
+        end
+    end
+
+    if flyLike then
+        snap.airFlyFrames += 1
+    else
+        snap.airFlyFrames = math.max(0, snap.airFlyFrames - 0.5)
+    end
+
+    if snap.airFlyFrames >= 8 or speed > 160 or dist > 90 then
+        snap.flyEvidence = true
+    end
+
+    if speed > 125 or dist > 80 then
+        snap.highSpeedFrames += 1
+    else
+        snap.highSpeedFrames = math.max(0, snap.highSpeedFrames - 1)
+    end
+
+    if isInfHumanoid(hum) and snap.flyEvidence then
+        staffLocked[plr.Name] = true
+    end
+
+    if snap.lastHP < hum.MaxHealth * 0.5 and hum.Health == hum.MaxHealth then
+        snap.godmodFrames += 1
+    else
+        snap.godmodFrames = math.max(0, snap.godmodFrames - 0.5)
+    end
+
+    local isSTAFF = false
+
+    -- Condition stricte demandée : invisibilité STAFF seulement si fly déjà détecté.
+    if snap.flyEvidence and snap.invisibleFrames >= 5 then
+        isSTAFF = true
+    end
+
+    if snap.flyEvidence and snap.godmodFrames >= 3 then
+        isSTAFF = true
+    end
+
+    if snap.flyEvidence and snap.highSpeedFrames >= 5 then
+        isSTAFF = true
+    end
+
+    if isSTAFF then
+        staffLocked[plr.Name] = true
+    end
+
+    snap.lastPos = hrp.Position
+    snap.lastHP = hum.Health
+    snap.lastT = now
+
+    return staffLocked[plr.Name] == true
 end
 
 local function cleanESP(plr)
-    local obj = espObjects[plr.Name]; if not obj then return end
+    local obj = espObjects[plr.Name]
+    if not obj then return end
+
     espObjects[plr.Name] = nil
-    if obj.conns then for _, c in pairs(obj.conns) do pcall(function() c:Disconnect() end) end end
-    if obj.highlight  then pcall(function() obj.highlight:Destroy() end) end
-    if obj.billboard  then pcall(function() obj.billboard:Destroy() end) end
-    if obj.skeletonLines then for _, l in pairs(obj.skeletonLines) do pcall(function() l.Visible=false; l:Remove() end) end end
-    if obj.boxDrawing then pcall(function() obj.boxDrawing.Visible=false; obj.boxDrawing:Remove() end) end
+
+    if obj.conns then
+        for _, c in pairs(obj.conns) do
+            pcall(function() c:Disconnect() end)
+        end
+    end
+
+    if obj.highlight then pcall(function() obj.highlight:Destroy() end) end
+    if obj.billboard then pcall(function() obj.billboard:Destroy() end) end
+    if obj.footBillboard then pcall(function() obj.footBillboard:Destroy() end) end
 end
 
 local function isESPValid(plr)
@@ -700,156 +835,532 @@ local function isESPValid(plr)
     if not obj then return false end
     if not obj.highlight or not obj.highlight.Parent then return false end
     if not obj.billboard or not obj.billboard.Parent then return false end
+    if not obj.footBillboard or not obj.footBillboard.Parent then return false end
     return true
 end
 
 local function setupESP(plr, char)
     cleanESP(plr)
-    task.wait(0.8)
+    task.wait(0.35)
+
     if not char or not char.Parent then return end
     if plr.Character ~= char then return end
 
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then
-        task.wait(1)
+    local head = char:FindFirstChild("Head")
+
+    if not hrp or not hum or not head then
+        task.wait(0.8)
         hrp = char:FindFirstChild("HumanoidRootPart")
         hum = char:FindFirstChildOfClass("Humanoid")
+        head = char:FindFirstChild("Head")
     end
-    if not hrp or not hum then return end
-    if hum.Health <= 0 then return end
 
-    local obj = { conns={}, skeletonLines={}, boxDrawing=nil, highlight=nil, billboard=nil }
+    if not hrp or not hum or not head then return end
+    if hum.Health <= 0 and not isInfHumanoid(hum) then return end
 
+    local obj = { conns = {}, highlight = nil, billboard = nil, footBillboard = nil }
+
+    -- Glow propre sur le skin, sans grosse box UI.
     local hl = Instance.new("Highlight")
-    hl.FillColor=Color3.fromRGB(255,255,255); hl.OutlineColor=Color3.fromRGB(255,255,255)
-    hl.FillTransparency=0.85; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent=char
-    obj.highlight=hl
+    hl.FillColor = Color3.fromRGB(255, 255, 255)
+    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+    hl.FillTransparency = 0.91
+    hl.OutlineTransparency = 0.08
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = char
+    obj.highlight = hl
 
+    -- Nameplate compact : STAFF + pseudo + team colorée + distance + mini HP.
     local bb = Instance.new("BillboardGui")
-    bb.Adornee=hrp; bb.Size=UDim2.new(0,200,0,60); bb.StudsOffset=Vector3.new(0,3.2,0)
-    bb.AlwaysOnTop=true; bb.Parent=hrp; obj.billboard=bb
+    bb.Name = "TrackAllInfo"
+    bb.Adornee = head
+    bb.Size = UDim2.new(0, 175, 0, 70)
+    bb.StudsOffset = Vector3.new(0, 1.15, 0)
+    bb.AlwaysOnTop = true
+    bb.MaxDistance = espMaxDistance
+    bb.Parent = head
+    obj.billboard = bb
 
-    local bg = Instance.new("Frame")
-    bg.Size=UDim2.new(1,0,1,0); bg.BackgroundTransparency=1; bg.BorderSizePixel=0; bg.Parent=bb
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1, 0, 1, 0)
+    holder.BackgroundTransparency = 1
+    holder.BorderSizePixel = 0
+    holder.Parent = bb
+
+    local staffVisualActive = false
+
+    local lSTAFF = Instance.new("TextLabel")
+    lSTAFF.Size = UDim2.new(1, 0, 0, 22)
+    lSTAFF.Position = UDim2.new(0, 0, 0, 0)
+    lSTAFF.BackgroundTransparency = 1
+    lSTAFF.Text = "STAFF"
+    lSTAFF.TextColor3 = Color3.fromRGB(255, 45, 45)
+    lSTAFF.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lSTAFF.TextStrokeTransparency = 0
+    lSTAFF.TextScaled = false
+    lSTAFF.TextSize = 19
+    lSTAFF.Font = Enum.Font.GothamBlack
+    lSTAFF.TextXAlignment = Enum.TextXAlignment.Center
+    lSTAFF.Visible = false
+    lSTAFF.Parent = holder
 
     local lName = Instance.new("TextLabel")
-    lName.Size=UDim2.new(1,0,0,22); lName.Position=UDim2.new(0,0,0,0)
-    lName.BackgroundTransparency=1; lName.Text=plr.Name
-    lName.TextColor3=Color3.fromRGB(255,255,255); lName.TextStrokeColor3=Color3.fromRGB(0,0,0)
-    lName.TextStrokeTransparency=0; lName.TextScaled=false; lName.TextSize=14
-    lName.Font=Enum.Font.GothamBold; lName.TextXAlignment=Enum.TextXAlignment.Center
-    lName.Visible=espOptions.name; lName.Parent=bg
+    lName.Size = UDim2.new(1, 0, 0, 15)
+    lName.Position = UDim2.new(0, 0, 0, 0)
+    lName.BackgroundTransparency = 1
+    lName.Text = plr.Name
+    lName.TextColor3 = Color3.fromRGB(245, 245, 245)
+    lName.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lName.TextStrokeTransparency = 0
+    lName.TextScaled = false
+    lName.TextSize = 12
+    lName.Font = Enum.Font.GothamBold
+    lName.TextXAlignment = Enum.TextXAlignment.Center
+    lName.Visible = espOptions.name
+    lName.Parent = holder
 
-    local hpBg = Instance.new("Frame")
-    hpBg.Size=UDim2.new(0.85,0,0,5); hpBg.Position=UDim2.new(0.075,0,0,26)
-    hpBg.BackgroundColor3=Color3.fromRGB(40,40,40); hpBg.BackgroundTransparency=0.2
-    hpBg.BorderSizePixel=0; hpBg.Visible=espOptions.health; hpBg.Parent=bg
-    Instance.new("UICorner",hpBg).CornerRadius=UDim.new(1,0)
-
-    local hpBar = Instance.new("Frame")
-    hpBar.Size=UDim2.new(1,0,1,0); hpBar.BackgroundColor3=Color3.fromRGB(50,220,80)
-    hpBar.BorderSizePixel=0; hpBar.Parent=hpBg
-    Instance.new("UICorner",hpBar).CornerRadius=UDim.new(1,0)
-
-    local lHP = Instance.new("TextLabel")
-    lHP.Size=UDim2.new(1,0,0,14); lHP.Position=UDim2.new(0,0,0,33)
-    lHP.BackgroundTransparency=1; lHP.Text=math.floor(hum.Health).."/"..math.floor(hum.MaxHealth)
-    lHP.TextColor3=Color3.fromRGB(255,255,255); lHP.TextStrokeColor3=Color3.fromRGB(0,0,0)
-    lHP.TextStrokeTransparency=0; lHP.TextScaled=false; lHP.TextSize=11; lHP.Font=Enum.Font.Gotham
-    lHP.TextXAlignment=Enum.TextXAlignment.Center; lHP.Visible=espOptions.health; lHP.Parent=bg
+    local lTeam = Instance.new("TextLabel")
+    lTeam.Size = UDim2.new(1, 0, 0, 12)
+    lTeam.Position = UDim2.new(0, 0, 0, 14)
+    lTeam.BackgroundTransparency = 1
+    lTeam.Text = ""
+    lTeam.TextColor3 = Color3.fromRGB(190, 190, 190)
+    lTeam.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lTeam.TextStrokeTransparency = 0.08
+    lTeam.TextScaled = false
+    lTeam.TextSize = 10
+    lTeam.Font = Enum.Font.GothamBold
+    lTeam.TextXAlignment = Enum.TextXAlignment.Center
+    lTeam.Visible = true
+    lTeam.Parent = holder
 
     local lDist = Instance.new("TextLabel")
-    lDist.Size=UDim2.new(1,0,0,14); lDist.Position=UDim2.new(0,0,0,47)
-    lDist.BackgroundTransparency=1; lDist.Text="0m"
-    lDist.TextColor3=Color3.fromRGB(255,255,255); lDist.TextStrokeColor3=Color3.fromRGB(0,0,0)
-    lDist.TextStrokeTransparency=0; lDist.TextScaled=false; lDist.TextSize=11; lDist.Font=Enum.Font.Gotham
-    lDist.TextXAlignment=Enum.TextXAlignment.Center; lDist.Visible=espOptions.distance; lDist.Parent=bg
+    lDist.Size = UDim2.new(1, 0, 0, 11)
+    lDist.Position = UDim2.new(0, 0, 0, 26)
+    lDist.BackgroundTransparency = 1
+    lDist.Text = "0m"
+    lDist.TextColor3 = Color3.fromRGB(185, 185, 185)
+    lDist.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lDist.TextStrokeTransparency = 0.12
+    lDist.TextScaled = false
+    lDist.TextSize = 10
+    lDist.Font = Enum.Font.Gotham
+    lDist.TextXAlignment = Enum.TextXAlignment.Center
+    lDist.Visible = espOptions.distance
+    lDist.Parent = holder
 
-    for _ in ipairs(SKELETON_BONES) do table.insert(obj.skeletonLines, newLine()) end
-    local boxD = newBox(); obj.boxDrawing = boxD
+    local hpBg = Instance.new("Frame")
+    hpBg.Name = "HPBackground"
+    hpBg.AnchorPoint = Vector2.new(0.5, 0)
+    hpBg.Position = UDim2.new(0.5, 0, 0, 40)
+    hpBg.Size = UDim2.new(0, 82, 0, 4)
+    hpBg.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    hpBg.BackgroundTransparency = 0.16
+    hpBg.BorderSizePixel = 0
+    hpBg.Visible = espOptions.health
+    hpBg.Parent = holder
+
+    local hpStroke = Instance.new("UIStroke")
+    hpStroke.Color = Color3.fromRGB(0, 0, 0)
+    hpStroke.Thickness = 1
+    hpStroke.Transparency = 0.18
+    hpStroke.Parent = hpBg
+
+    local hpBar = Instance.new("Frame")
+    hpBar.Name = "HPFill"
+    hpBar.Position = UDim2.new(0, 0, 0, 0)
+    hpBar.Size = UDim2.new(1, 0, 1, 0)
+    hpBar.BackgroundColor3 = Color3.fromRGB(40, 210, 90)
+    hpBar.BorderSizePixel = 0
+    hpBar.Parent = hpBg
+
+    -- Armes sous les pieds : uniquement pour la team Civil, et on ignore les items basiques.
+    local footBb = Instance.new("BillboardGui")
+    footBb.Name = "TrackAllWeapons"
+    footBb.Adornee = hrp
+    footBb.Size = UDim2.new(0, 170, 0, 18)
+    footBb.StudsOffset = Vector3.new(0, -2.85, 0)
+    footBb.AlwaysOnTop = true
+    footBb.MaxDistance = espMaxDistance
+    footBb.Enabled = false
+    footBb.Parent = hrp
+    obj.footBillboard = footBb
+
+    local weaponLabel = Instance.new("TextLabel")
+    weaponLabel.Size = UDim2.new(1, 0, 1, 0)
+    weaponLabel.BackgroundTransparency = 1
+    weaponLabel.Text = ""
+    weaponLabel.TextColor3 = Color3.fromRGB(245, 245, 245)
+    weaponLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    weaponLabel.TextStrokeTransparency = 0.05
+    weaponLabel.TextScaled = false
+    weaponLabel.TextSize = 10
+    weaponLabel.Font = Enum.Font.GothamBold
+    weaponLabel.TextXAlignment = Enum.TextXAlignment.Center
+    weaponLabel.Parent = footBb
+
+    local ignoredItems = {
+        ["clé de voiture"] = true,
+        ["cle de voiture"] = true,
+        ["papiers"] = true,
+        ["phone"] = true,
+        ["sac de sport"] = true,
+    }
+
+    local function cleanItemName(name)
+        name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        return name
+    end
+
+    local function isIgnoredItem(name)
+        local n = string.lower(cleanItemName(name))
+        return ignoredItems[n] == true
+    end
+
+    local function isCivilTeam()
+        return plr.Team and plr.Team.Name == "Civil"
+    end
+
+    local function getTeamName()
+        if plr.Team and plr.Team.Name then
+            return plr.Team.Name
+        end
+        return "Sans team"
+    end
+
+    local function getTeamColor()
+        local ok, c = pcall(function()
+            return plr.TeamColor.Color
+        end)
+        if ok and c then return c end
+        return Color3.fromRGB(190, 190, 190)
+    end
+
+    local function collectWeapons()
+        if not isCivilTeam() then return "" end
+
+        local found = {}
+        local seen = {}
+
+        local function scan(container)
+            if not container then return end
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") then
+                    local name = cleanItemName(item.Name)
+                    if name ~= "" and not isIgnoredItem(name) and not seen[name] then
+                        seen[name] = true
+                        table.insert(found, name)
+                    end
+                end
+            end
+        end
+
+        scan(plr:FindFirstChild("Backpack"))
+        scan(plr.Character)
+
+        if #found == 0 then return "" end
+        if #found > 3 then
+            return found[1] .. " • " .. found[2] .. " • " .. found[3] .. " +" .. tostring(#found - 3)
+        end
+
+        return table.concat(found, " • ")
+    end
+
+    local function updateTeamLabel()
+        lTeam.Text = getTeamName()
+        lTeam.TextColor3 = getTeamColor()
+    end
+
+    local function getHealthColor(ratio)
+        if ratio <= 0.30 then
+            return Color3.fromRGB(255, 65, 65)
+        elseif ratio <= 0.60 then
+            return Color3.fromRGB(255, 205, 55)
+        else
+            return Color3.fromRGB(45, 215, 95)
+        end
+    end
+
+    local function getDistanceScale(dist)
+        if not dist then return 1 end
+        local t = math.clamp((dist - 25) / 520, 0, 1)
+        return 1 - (t * 0.62)
+    end
+
+    local function refreshESPLayout(dist)
+        local ok, size = pcall(function()
+            return char:GetExtentsSize()
+        end)
+        if not ok or not size then return end
+
+        local scale = getDistanceScale(dist)
+        local fade = math.clamp(((dist or 0) - 120) / 650, 0, 1)
+        local staffH = staffVisualActive and math.max(16, math.floor(22 * scale + 0.5)) or 0
+
+        local width = math.max(82, math.floor((136 + size.X * 8) * scale))
+        local height = math.max(34, math.floor((50 * scale) + staffH))
+        local nameSize = math.max(8, math.floor(12 * scale + 0.5))
+        local teamSize = math.max(7, math.floor(10 * scale + 0.5))
+        local distSize = math.max(7, math.floor(10 * scale + 0.5))
+        local staffSize = math.max(12, math.floor(19 * scale + 0.5))
+        local hpW = math.max(34, math.floor(82 * scale))
+        local hpH = math.max(2, math.floor(4 * scale + 0.5))
+        local nameH = math.max(11, nameSize + 3)
+        local teamH = math.max(9, teamSize + 2)
+        local distH = math.max(8, distSize + 2)
+        local y = staffH
+
+        bb.Size = UDim2.new(0, width, 0, height)
+        bb.StudsOffset = Vector3.new(0, math.clamp(size.Y * 0.34, 1.0, 1.55), 0)
+
+        lSTAFF.Size = UDim2.new(1, 0, 0, staffH)
+        lSTAFF.TextSize = staffSize
+        lSTAFF.TextTransparency = fade * 0.08
+        lSTAFF.TextStrokeTransparency = fade * 0.18
+
+        lName.Position = UDim2.new(0, 0, 0, y)
+        lName.Size = UDim2.new(1, 0, 0, nameH)
+        lName.TextSize = nameSize
+        lName.TextTransparency = fade * 0.18
+        lName.TextStrokeTransparency = fade * 0.32
+        y += nameH - 1
+
+        lTeam.Position = UDim2.new(0, 0, 0, y)
+        lTeam.Size = UDim2.new(1, 0, 0, teamH)
+        lTeam.TextSize = teamSize
+        lTeam.TextTransparency = fade * 0.22
+        lTeam.TextStrokeTransparency = 0.08 + (fade * 0.34)
+        y += teamH - 1
+
+        lDist.Position = UDim2.new(0, 0, 0, y)
+        lDist.Size = UDim2.new(1, 0, 0, distH)
+        lDist.TextSize = distSize
+        lDist.TextTransparency = fade * 0.26
+        lDist.TextStrokeTransparency = 0.12 + (fade * 0.38)
+        y += distH + 2
+
+        hpBg.Position = UDim2.new(0.5, 0, 0, y)
+        hpBg.Size = UDim2.new(0, hpW, 0, hpH)
+        hpBg.BackgroundTransparency = 0.16 + (fade * 0.34)
+        hpStroke.Transparency = 0.18 + (fade * 0.38)
+        hpBar.BackgroundTransparency = fade * 0.18
+
+        local footW = math.max(70, math.floor(165 * scale))
+        local footH = math.max(12, math.floor(18 * scale))
+        local footSize = math.max(8, math.floor(10 * scale + 0.5))
+        footBb.Size = UDim2.new(0, footW, 0, footH)
+        footBb.StudsOffset = Vector3.new(0, -math.clamp(size.Y * 0.58, 2.55, 4.0), 0)
+        weaponLabel.TextSize = footSize
+        weaponLabel.TextTransparency = fade * 0.28
+        weaponLabel.TextStrokeTransparency = 0.05 + (fade * 0.45)
+
+        if staffVisualActive then
+            hl.FillTransparency = 0.66 + (fade * 0.08)
+            hl.OutlineTransparency = 0.01 + (fade * 0.18)
+        else
+            hl.FillTransparency = 0.91 + (fade * 0.06)
+            hl.OutlineTransparency = 0.08 + (fade * 0.48)
+        end
+    end
+
+    local function updateHealthBar()
+        if not hum or not hum.Parent or not hpBar or not hpBar.Parent then return end
+
+        if isInfHumanoid(hum) then
+            staffLocked[plr.Name] = true
+            hpBar.Size = UDim2.new(1, 0, 1, 0)
+            hpBar.BackgroundColor3 = Color3.fromRGB(255, 65, 65)
+            return
+        end
+
+        local maxHp = math.max(hum.MaxHealth, 1)
+        local ratio = math.clamp(hum.Health / maxHp, 0, 1)
+
+        hpBar.Size = UDim2.new(ratio, 0, 1, 0)
+        hpBar.BackgroundColor3 = getHealthColor(ratio)
+    end
+
+    local function setStaffVisual(enabled)
+        staffVisualActive = enabled == true
+        lSTAFF.Visible = staffVisualActive
+
+        if enabled then
+            -- Aura rouge forte : visible même si le joueur a rendu son skin invisible.
+            hl.Enabled = true
+            hl.FillColor = Color3.fromRGB(255, 25, 25)
+            hl.OutlineColor = Color3.fromRGB(255, 80, 80)
+            hl.FillTransparency = 0.66
+            hl.OutlineTransparency = 0.01
+
+            lSTAFF.TextColor3 = Color3.fromRGB(255, 45, 45)
+            lName.TextColor3 = Color3.fromRGB(255, 95, 95)
+            lDist.TextColor3 = Color3.fromRGB(255, 155, 155)
+            hpStroke.Color = Color3.fromRGB(255, 70, 70)
+        else
+            hl.FillColor = Color3.fromRGB(255, 255, 255)
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.FillTransparency = 0.91
+            hl.OutlineTransparency = 0.08
+
+            lName.TextColor3 = Color3.fromRGB(245, 245, 245)
+            lDist.TextColor3 = Color3.fromRGB(185, 185, 185)
+            hpStroke.Color = Color3.fromRGB(0, 0, 0)
+        end
+    end
 
     table.insert(obj.conns, hum.Died:Connect(function()
-        task.wait(0.1); cleanESP(plr)
+        task.wait(0.1)
+        cleanESP(plr)
+
+        -- TrackAll reste actif après mort/respawn : on réattend le nouveau Character.
+        if trackOn and plr.Parent then
+            task.spawn(function()
+                local nextChar = nil
+
+                if plr.Character and plr.Character ~= char then
+                    nextChar = plr.Character
+                else
+                    pcall(function()
+                        nextChar = plr.CharacterAdded:Wait()
+                    end)
+                end
+
+                if trackOn and nextChar and plr.Parent and ensureESP then
+                    task.wait(0.35)
+                    ensureESP(plr, nextChar)
+                end
+            end)
+        end
     end))
+
     table.insert(obj.conns, char.AncestryChanged:Connect(function(_, parent)
-        if not parent then cleanESP(plr) end
+        if not parent then
+            cleanESP(plr)
+        end
     end))
-    table.insert(obj.conns, hum.HealthChanged:Connect(function(hp)
-        if not hpBar or not hpBar.Parent then return end
-        local ratio = math.clamp(hp / hum.MaxHealth, 0, 1)
-        hpBar.Size = UDim2.new(ratio,0,1,0)
-        hpBar.BackgroundColor3 = Color3.fromRGB(math.floor((1-ratio)*80), math.floor(50+ratio*170), math.floor(ratio*80))
-        lHP.Text = math.floor(hp).."/"..math.floor(hum.MaxHealth)
+
+    table.insert(obj.conns, hum.HealthChanged:Connect(function()
+        updateHealthBar()
     end))
 
     local frameCount = 0
+
     table.insert(obj.conns, RunService.RenderStepped:Connect(function()
-        if not char or not char.Parent or not hrp or not hrp.Parent then cleanESP(plr); return end
-        local myRoot=getHRP(); local cam=getCam(); local dist=0
-        if myRoot then dist=math.floor((hrp.Position-myRoot.Position).Magnitude) end
+        if not char or not char.Parent or not hrp or not hrp.Parent or not head or not head.Parent then
+            cleanESP(plr)
+            return
+        end
+
+        local myRoot = getHRP()
+        local dist = 0
+
+        if myRoot then
+            dist = math.floor((hrp.Position - myRoot.Position).Magnitude)
+        end
+
         local tooFar = dist > espMaxDistance
-        if bb and bb.Parent then bb.Enabled=not tooFar end
-        if hl and hl.Parent then hl.Enabled=not tooFar end
-        lName.Visible=espOptions.name and not tooFar
-        lHP.Visible=espOptions.health and not tooFar
-        hpBg.Visible=espOptions.health and not tooFar
-        lDist.Visible=espOptions.distance and not tooFar
-        if not tooFar then lDist.Text=dist.."m" end
+
+        if bb and bb.Parent then bb.Enabled = not tooFar end
+        if footBb and footBb.Parent then footBb.Enabled = false end
+        if hl and hl.Parent then hl.Enabled = not tooFar end
+
+        lName.Visible = espOptions.name and not tooFar
+        lTeam.Visible = not tooFar
+        lDist.Visible = espOptions.distance and not tooFar
+        hpBg.Visible = espOptions.health and not tooFar
+
+        if not tooFar then
+            lName.Text = plr.Name
+            lDist.Text = dist .. "m"
+            updateTeamLabel()
+
+            local weaponsText = collectWeapons()
+            weaponLabel.Text = weaponsText
+            footBb.Enabled = weaponsText ~= ""
+
+            refreshESPLayout(dist)
+            updateHealthBar()
+        end
+
         frameCount += 1
-        if STAFFDetectOn and frameCount%15==0 then
+
+        if STAFFDetectOn and frameCount % 10 == 0 then
             if isSuspectedSTAFF(plr) then
-                hl.FillColor=Color3.fromRGB(220,20,20); hl.OutlineColor=Color3.fromRGB(255,80,80); lName.TextColor3=Color3.fromRGB(255,80,80)
-            else
-                hl.FillColor=Color3.fromRGB(255,255,255); hl.OutlineColor=Color3.fromRGB(255,255,255); lName.TextColor3=Color3.fromRGB(255,255,255)
+                setStaffVisual(true)
+            elseif not staffLocked[plr.Name] then
+                setStaffVisual(false)
             end
-        end
-        local showSkel=espOptions.skeleton and not tooFar
-        for i,bone in ipairs(SKELETON_BONES) do
-            local line=obj.skeletonLines[i]
-            if line then
-                if showSkel then
-                    local p0=char:FindFirstChild(bone[1]); local p1=char:FindFirstChild(bone[2])
-                    if p0 and p1 then
-                        local s0,on0=cam:WorldToViewportPoint(p0.Position); local s1,on1=cam:WorldToViewportPoint(p1.Position)
-                        if on0 and on1 and s0.Z>0 and s1.Z>0 then
-                            line.From=Vector2.new(s0.X,s0.Y); line.To=Vector2.new(s1.X,s1.Y); line.Visible=true
-                        else line.Visible=false end
-                    else line.Visible=false end
-                else line.Visible=false end
-            end
-        end
-        if boxD then
-            if espOptions.box and not tooFar then
-                local minX,minY,maxX,maxY=math.huge,math.huge,-math.huge,-math.huge; local anyOnScreen=false
-                for _,part in pairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        local sp,onScreen=cam:WorldToViewportPoint(part.Position)
-                        if onScreen and sp.Z>0 then
-                            anyOnScreen=true
-                            if sp.X<minX then minX=sp.X end; if sp.Y<minY then minY=sp.Y end
-                            if sp.X>maxX then maxX=sp.X end; if sp.Y>maxY then maxY=sp.Y end
-                        end
-                    end
-                end
-                if anyOnScreen then
-                    local pad=4; boxD.Position=Vector2.new(minX-pad,minY-pad)
-                    boxD.Size=Vector2.new((maxX-minX)+pad*2,(maxY-minY)+pad*2); boxD.Visible=true; boxD.Color=Color3.fromRGB(255,255,255)
-                else boxD.Visible=false end
-            else boxD.Visible=false end
+        elseif staffLocked[plr.Name] then
+            setStaffVisual(true)
+        else
+            setStaffVisual(false)
         end
     end))
+
+    updateTeamLabel()
+    weaponLabel.Text = collectWeapons()
+    footBb.Enabled = weaponLabel.Text ~= ""
+    refreshESPLayout(0)
+    updateHealthBar()
+
+    if staffLocked[plr.Name] then
+        setStaffVisual(true)
+    end
 
     espObjects[plr.Name] = obj
 end
 
 local espCharConns = {}
+local espCharRemovingConns = {}
+
+ensureESP = function(plr, char)
+    if not trackOn or not plr or plr == LP or not plr.Parent then return end
+    char = char or plr.Character
+    if not char or not char.Parent then return end
+
+    if espPending[plr.Name] then return end
+    espPending[plr.Name] = true
+
+    task.spawn(function()
+        pcall(function()
+            local hrp = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 8)
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local timeout = tick() + 8
+
+            while not hum and tick() < timeout do
+                task.wait(0.1)
+                hum = char:FindFirstChildOfClass("Humanoid")
+            end
+
+            if not trackOn or not plr.Parent or plr.Character ~= char then return end
+            if not hrp or not hum then return end
+            if hum.Health <= 0 and not isInfHumanoid(hum) then return end
+
+            setupESP(plr, char)
+        end)
+        espPending[plr.Name] = nil
+    end)
+end
+
 local function subscribeESP(plr)
     if plr == LP then return end
+
     if espCharConns[plr.Name] then espCharConns[plr.Name]:Disconnect() end
+    if espCharRemovingConns[plr.Name] then espCharRemovingConns[plr.Name]:Disconnect() end
+
     espCharConns[plr.Name] = plr.CharacterAdded:Connect(function(char)
-        if trackOn then task.spawn(setupESP, plr, char) end
+        if trackOn then ensureESP(plr, char) end
     end)
+
+    espCharRemovingConns[plr.Name] = plr.CharacterRemoving:Connect(function()
+        cleanESP(plr)
+    end)
+
+    if trackOn and plr.Character then
+        ensureESP(plr, plr.Character)
+    end
 end
 
 for _, p in pairs(Players:GetPlayers()) do subscribeESP(p) end
@@ -860,16 +1371,21 @@ Players.PlayerAdded:Connect(function(p)
         if not char then
             local conn; conn = p.CharacterAdded:Connect(function(c)
                 conn:Disconnect()
-                if trackOn then task.spawn(setupESP, p, c) end
+                if trackOn then ensureESP(p, c) end
             end)
-        else task.spawn(setupESP, p, char) end
+        else
+            ensureESP(p, char)
+        end
     end
 end)
 
 Players.PlayerRemoving:Connect(function(p)
     cleanESP(p)
     if espCharConns[p.Name] then espCharConns[p.Name]:Disconnect(); espCharConns[p.Name]=nil end
+    if espCharRemovingConns[p.Name] then espCharRemovingConns[p.Name]:Disconnect(); espCharRemovingConns[p.Name]=nil end
+    espPending[p.Name]=nil
     playerSnapshots[p.Name]=nil
+    staffLocked[p.Name]=nil
 end)
 
 task.spawn(function()
@@ -881,8 +1397,8 @@ task.spawn(function()
                     local char = plr.Character
                     if char then
                         local hum = char:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health>0 and not isESPValid(plr) then
-                            task.spawn(setupESP, plr, char)
+                        if not isESPValid(plr) and (not hum or hum.Health > 0 or isInfHumanoid(hum)) then
+                            ensureESP(plr, char)
                         end
                     else
                         if espObjects[plr.Name] then cleanESP(plr) end
@@ -1559,15 +2075,209 @@ end
 
 setupStaffIconWatcher()
 
-SecSelf:Toggle({
-    Name = "STAFF Icon (local)",
-    Flag = "IconVisible",
-    Default = false,
-    Callback = function(v)
-        staffIconVisible = v
-        applyStaffIconAll()
+-- ══════════════════════════════════════
+--  BADGES NAMETAG LOCAL
+-- ══════════════════════════════════════
+local localBadgesEnabled = {}
+local localBadgeConns = {}
 
-        notify("Staff Icon", v and "VISIBLE" or "INVISIBLE", 2)
+local BadgeOrder = {
+    "Fondateur",
+    "Admin",
+    "Developer",
+    "Certifie",
+    "Createur",
+    "VIP",
+    "Fan",
+    "Chefdegroupe",
+    "Millionnaire",
+    "Directeur",
+    "Membre",
+    "Computer",
+    "Console",
+    "Phone",
+}
+
+local function getLocalNameTagFrame(char)
+    if not char then return nil end
+
+    local head = char:FindFirstChild("Head")
+    if not head then return nil end
+
+    local nameTag = head:FindFirstChild("NameTag")
+    if not nameTag then return nil end
+
+    return nameTag:FindFirstChild("Frame")
+end
+
+local function getBadgeTemplate(frame, badgeName)
+    if frame then
+        local models = frame:FindFirstChild("Models")
+        if models then
+            local badge = models:FindFirstChild(badgeName)
+            if badge then return badge end
+        end
+    end
+
+    local storageModels = ReplicatedStorage:FindFirstChild("3dModels")
+    local nameTagModel = storageModels and storageModels:FindFirstChild("NameTag")
+    local templateFrame = nameTagModel and nameTagModel:FindFirstChild("Frame")
+    local models = templateFrame and templateFrame:FindFirstChild("Models")
+
+    return models and models:FindFirstChild(badgeName)
+end
+
+local function clearLocalBadges(frame)
+    if not frame then return end
+
+    for _, scrollName in pairs({ "ScrollingFrame1", "ScrollingFrame2" }) do
+        local scroll = frame:FindFirstChild(scrollName)
+        if scroll then
+            for _, obj in pairs(scroll:GetChildren()) do
+                if obj:GetAttribute("LocalFakeBadge") then
+                    obj:Destroy()
+                end
+            end
+        end
+    end
+end
+
+local function applyLocalBadgesForChar(char)
+    local frame = getLocalNameTagFrame(char)
+    if not frame then return end
+
+    local scroll1 = frame:FindFirstChild("ScrollingFrame1")
+    local scroll2 = frame:FindFirstChild("ScrollingFrame2")
+    if not scroll1 or not scroll2 then return end
+
+    clearLocalBadges(frame)
+
+    local added = 0
+
+    for _, badgeName in ipairs(BadgeOrder) do
+        if localBadgesEnabled[badgeName] then
+            local template = getBadgeTemplate(frame, badgeName)
+
+            if template then
+                added += 1
+
+                local clone = template:Clone()
+                clone.Name = "Local_" .. badgeName
+                clone.Visible = true
+                clone:SetAttribute("LocalFakeBadge", true)
+
+                clone.Parent = added > 6 and scroll2 or scroll1
+            end
+        end
+    end
+end
+
+local function applyLocalBadges()
+    local char = LP.Character
+    if char then
+        applyLocalBadgesForChar(char)
+
+        task.delay(0.5, function()
+            if LP.Character then
+                applyLocalBadgesForChar(LP.Character)
+            end
+        end)
+
+        task.delay(1.5, function()
+            if LP.Character then
+                applyLocalBadgesForChar(LP.Character)
+            end
+        end)
+    end
+end
+
+for _, c in pairs(localBadgeConns) do
+    pcall(function()
+        c:Disconnect()
+    end)
+end
+
+localBadgeConns = {}
+
+table.insert(localBadgeConns, LP.CharacterAdded:Connect(function(char)
+    task.wait(0.8)
+    applyLocalBadges()
+end))
+
+-- ══════════════════════════════════════
+--  ROULETTE STAFF ICON / BADGES LOCAL
+-- ══════════════════════════════════════
+cosmeticChoice = "Staff Icon ON"
+
+function setAllLocalBadges(enabled)
+    for _, badgeName in ipairs(BadgeOrder) do
+        localBadgesEnabled[badgeName] = enabled
+    end
+
+    applyLocalBadges()
+end
+
+cosmeticItems = {
+    "Staff Icon ON",
+    "Staff Icon OFF",
+    "Tous badges ON",
+    "Tous badges OFF",
+}
+
+for _, badgeName in ipairs(BadgeOrder) do
+    table.insert(cosmeticItems, "Toggle " .. badgeName)
+end
+
+SecSelf:Dropdown({
+    Name = "Staff / Badges",
+    Flag = "CosmeticLocalChoice",
+    Items = cosmeticItems,
+    Default = "Staff Icon ON",
+    Callback = function(v)
+        cosmeticChoice = tostring(v)
+    end,
+})
+
+SecSelf:Button({
+    Name = "Appliquer Staff / Badges",
+    Callback = function()
+        local choice = cosmeticChoice
+
+        if choice == "Staff Icon ON" then
+            staffIconVisible = true
+            applyStaffIconAll()
+            notify("Staff Icon", "VISIBLE", 2)
+            return
+        end
+
+        if choice == "Staff Icon OFF" then
+            staffIconVisible = false
+            applyStaffIconAll()
+            notify("Staff Icon", "INVISIBLE", 2)
+            return
+        end
+
+        if choice == "Tous badges ON" then
+            setAllLocalBadges(true)
+            notify("Badges", "Tous activés", 2)
+            return
+        end
+
+        if choice == "Tous badges OFF" then
+            setAllLocalBadges(false)
+            notify("Badges", "Tous désactivés", 2)
+            return
+        end
+
+        local badgeName = choice:match("^Toggle%s+(.+)$")
+        if badgeName then
+            localBadgesEnabled[badgeName] = not localBadgesEnabled[badgeName]
+            applyLocalBadges()
+            notify("Badge", badgeName .. (localBadgesEnabled[badgeName] and " ON" or " OFF"), 2)
+            return
+        end
+
+        notify("Badges", "Choix invalide", 2)
     end,
 })
 
@@ -1655,6 +2365,305 @@ Players.PlayerRemoving:Connect(function(p) if selectedTarget==p then selectedTar
 task.spawn(function() while true do task.wait(2); refreshDropdown() end end)
 
 SecTarget:Button({Name="Refresh joueurs (distance)",Callback=function() refreshDropdown(); notify("Refresh","Liste triée par distance !",2) end})
+
+-- ══════════════════════════════════════
+--  POPUP INVENTAIRE CIBLE PRO
+-- ══════════════════════════════════════
+TA_InventoryGui = nil
+
+function TA_CloseInventoryPopup()
+    if TA_InventoryGui then
+        pcall(function() TA_InventoryGui:Destroy() end)
+        TA_InventoryGui = nil
+    end
+end
+
+function TA_SafeText(v)
+    local ok, txt = pcall(function() return tostring(v) end)
+    return ok and txt or "?"
+end
+
+function TA_GetItemDetails(item)
+    return ""
+end
+
+function TA_GetInventoryData(plr)
+    local items = {}
+    local backpack = plr and plr:FindFirstChild("Backpack")
+
+    if backpack then
+        for _, obj in pairs(backpack:GetChildren()) do
+            table.insert(items, obj)
+        end
+    end
+
+    table.sort(items, function(a, b)
+        return a.Name:lower() < b.Name:lower()
+    end)
+
+    return items
+end
+
+function TA_CreateSectionLabel(parent, text)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -8, 0, 24)
+    label.BackgroundColor3 = Color3.fromRGB(28, 29, 34)
+    label.BorderSizePixel = 0
+    label.Text = "  " .. text
+    label.TextColor3 = Color3.fromRGB(190, 190, 198)
+    label.TextSize = 12
+    label.Font = Enum.Font.GothamBold
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = parent
+    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 7)
+end
+
+function TA_CreateEmptyLabel(parent)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -8, 0, 34)
+    label.BackgroundColor3 = Color3.fromRGB(22, 23, 27)
+    label.BackgroundTransparency = 0.05
+    label.BorderSizePixel = 0
+    label.Text = "  Backpack vide"
+    label.TextColor3 = Color3.fromRGB(145, 145, 152)
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = parent
+    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 8)
+end
+
+function TA_MakeInventoryCard(parent, item, sourceName)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, -8, 0, 38)
+    card.BackgroundColor3 = Color3.fromRGB(22, 23, 27)
+    card.BackgroundTransparency = 0.02
+    card.BorderSizePixel = 0
+    card.Parent = parent
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(58, 58, 66)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.35
+    stroke.Parent = card
+
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 7, 0, 7)
+    dot.Position = UDim2.new(0, 13, 0.5, -3)
+    dot.BackgroundColor3 = Color3.fromRGB(155, 155, 165)
+    dot.BorderSizePixel = 0
+    dot.Parent = card
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    local name = Instance.new("TextLabel")
+    name.Size = UDim2.new(1, -34, 1, 0)
+    name.Position = UDim2.new(0, 30, 0, 0)
+    name.BackgroundTransparency = 1
+    name.Text = item.Name
+    name.TextColor3 = Color3.fromRGB(228, 228, 235)
+    name.TextSize = 13
+    name.Font = Enum.Font.GothamMedium
+    name.TextXAlignment = Enum.TextXAlignment.Left
+    name.TextTruncate = Enum.TextTruncate.AtEnd
+    name.Parent = card
+end
+
+function TA_ShowInventoryPopup(plr)
+    TA_CloseInventoryPopup()
+
+    if not plr then
+        notify("Inventaire", "Aucune cible !", 2)
+        return
+    end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "TA_InventoryPopup"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 999999
+    TA_InventoryGui = gui
+
+    local okParent = pcall(function()
+        gui.Parent = game:GetService("CoreGui")
+    end)
+    if not okParent then
+        gui.Parent = LP:WaitForChild("PlayerGui")
+    end
+
+    local shadow = Instance.new("Frame")
+    shadow.Size = UDim2.new(1, 0, 1, 0)
+    shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    shadow.BackgroundTransparency = 0.55
+    shadow.BorderSizePixel = 0
+    shadow.Parent = gui
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 420, 0, 360)
+    main.Position = UDim2.new(0.5, -210, 0.5, -180)
+    main.BackgroundColor3 = Color3.fromRGB(16, 17, 20)
+    main.BorderSizePixel = 0
+    main.Parent = gui
+    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+    local mainStroke = Instance.new("UIStroke")
+    mainStroke.Color = Color3.fromRGB(62, 62, 70)
+    mainStroke.Thickness = 1
+    mainStroke.Transparency = 0.15
+    mainStroke.Parent = main
+
+    local top = Instance.new("Frame")
+    top.Size = UDim2.new(1, 0, 0, 46)
+    top.BackgroundColor3 = Color3.fromRGB(21, 22, 26)
+    top.BorderSizePixel = 0
+    top.Parent = main
+    Instance.new("UICorner", top).CornerRadius = UDim.new(0, 14)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -120, 1, 0)
+    title.Position = UDim2.new(0, 14, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "Inventaire — " .. plr.Name
+    title.TextColor3 = Color3.fromRGB(232, 232, 238)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 15
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = top
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.Size = UDim2.new(0, 0, 0, 0)
+    subtitle.Position = UDim2.new(0, 0, 0, 0)
+    subtitle.BackgroundTransparency = 1
+    subtitle.Text = ""
+    subtitle.TextColor3 = Color3.fromRGB(170, 170, 178)
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.TextSize = 10
+    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.Visible = false
+    subtitle.Parent = top
+
+    local close = Instance.new("TextButton")
+    close.Size = UDim2.new(0, 28, 0, 28)
+    close.Position = UDim2.new(1, -38, 0, 9)
+    close.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+    close.BorderSizePixel = 0
+    close.Text = "×"
+    close.TextColor3 = Color3.fromRGB(255, 255, 255)
+    close.TextSize = 20
+    close.Font = Enum.Font.GothamBold
+    close.Parent = top
+    Instance.new("UICorner", close).CornerRadius = UDim.new(0, 7)
+
+    local refresh = Instance.new("TextButton")
+    refresh.Size = UDim2.new(0, 68, 0, 28)
+    refresh.Position = UDim2.new(1, -112, 0, 9)
+    refresh.BackgroundColor3 = Color3.fromRGB(38, 39, 45)
+    refresh.BorderSizePixel = 0
+    refresh.Text = "Refresh"
+    refresh.TextColor3 = Color3.fromRGB(220, 220, 228)
+    refresh.TextSize = 12
+    refresh.Font = Enum.Font.GothamBold
+    refresh.Parent = top
+    Instance.new("UICorner", refresh).CornerRadius = UDim.new(0, 8)
+
+    local summary = Instance.new("TextLabel")
+    summary.Size = UDim2.new(1, -28, 0, 26)
+    summary.Position = UDim2.new(0, 14, 0, 56)
+    summary.BackgroundColor3 = Color3.fromRGB(22, 23, 27)
+    summary.BorderSizePixel = 0
+    summary.TextColor3 = Color3.fromRGB(175, 175, 184)
+    summary.Font = Enum.Font.Gotham
+    summary.TextSize = 12
+    summary.TextXAlignment = Enum.TextXAlignment.Left
+    summary.Parent = main
+    Instance.new("UICorner", summary).CornerRadius = UDim.new(0, 8)
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -28, 1, -96)
+    scroll.Position = UDim2.new(0, 14, 0, 88)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 5
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(88, 88, 96)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = main
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scroll
+
+    local function rebuild()
+        for _, obj in pairs(scroll:GetChildren()) do
+            if obj ~= layout then
+                obj:Destroy()
+            end
+        end
+
+        local items = TA_GetInventoryData(plr)
+
+        summary.Text = "   " .. #items .. " objet(s) dans le backpack"
+
+        if #items == 0 then
+            TA_CreateEmptyLabel(scroll)
+        else
+            for _, item in ipairs(items) do
+                TA_MakeInventoryCard(scroll, item)
+            end
+        end
+    end
+
+    close.MouseButton1Click:Connect(function()
+        TA_CloseInventoryPopup()
+    end)
+
+    refresh.MouseButton1Click:Connect(function()
+        rebuild()
+        notify("Inventaire", "Analyse refresh !", 1)
+    end)
+
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+
+    top.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end)
+
+    top.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if dragging and main and main.Parent and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    rebuild()
+end
+
+SecTarget:Button({
+    Name = "Inventaire cible",
+    Callback = function()
+        if not selectedTarget then
+            notify("Inventaire", "Aucune cible !", 2)
+            return
+        end
+
+        TA_ShowInventoryPopup(selectedTarget)
+    end,
+})
+
 
 SecTarget:Button({
     Name="TP → Joueur sélectionné",
@@ -2069,7 +3078,7 @@ SecESPMaster:Toggle({
     Callback=function(v)
         trackOn=v
         if v then
-            for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
+            for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then ensureESP(p,p.Character) end end
             notify("TrackAll","ON",2)
         else
             for _,p in pairs(Players:GetPlayers()) do cleanESP(p) end
@@ -2086,13 +3095,11 @@ SecESPMaster:Button({
         if not trackOn then notify("Erreur","Active TrackAll d'abord !",2) return end
         for _,p in pairs(Players:GetPlayers()) do cleanESP(p) end
         task.wait(0.3)
-        for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
+        for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then ensureESP(p,p.Character) end end
         notify("ESP","Rafraîchi !",2)
     end,
 })
 
-SecESPMaster:Toggle({Name="Skeleton ESP",Flag="ESPSkeleton",Default=true,Callback=function(v) espOptions.skeleton=v end})
-SecESPMaster:Toggle({Name="Box ESP",Flag="ESPBox",Default=true,Callback=function(v) espOptions.box=v; if not v then for _,obj in pairs(espObjects) do if obj.boxDrawing then obj.boxDrawing.Visible=false end end end end})
 SecESPMaster:Toggle({Name="Health ESP",Flag="ESPHealth",Default=true,Callback=function(v) espOptions.health=v end})
 SecESPMaster:Toggle({Name="Name ESP",Flag="ESPName",Default=true,Callback=function(v) espOptions.name=v end})
 SecESPMaster:Toggle({Name="Distance ESP",Flag="ESPDist",Default=true,Callback=function(v) espOptions.distance=v end})
@@ -2104,7 +3111,7 @@ SecESPMaster:Toggle({
         if v then
             if not trackOn then
                 trackOn=true
-                for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then task.spawn(setupESP,p,p.Character) end end
+                for _,p in pairs(Players:GetPlayers()) do if p~=LP and p.Character then ensureESP(p,p.Character) end end
                 notify("TrackAll","Activé automatiquement",2)
             end
             playerSnapshots={}; notify("STAFF Detect","ON",3)
