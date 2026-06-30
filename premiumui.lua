@@ -2665,8 +2665,8 @@ local Library = {
         AnchorPoint = Vector2.new(0, 0.5),
         Image = Window.VersionLogo,
         BackgroundTransparency = 1,
-        Position = UDim2.new(0, 398, 0.5, 0),
-        Size = UDim2.new(0, 32, 0, 32),
+        Position = UDim2.new(0, 425, 0.5, 0),
+        Size = UDim2.new(0, 45, 0, 45),
         BorderSizePixel = 0
     })
 
