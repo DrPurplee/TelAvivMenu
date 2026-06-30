@@ -2481,13 +2481,14 @@ local Library = {
             Params = Params or { }
 
             local Window = {
-                Logo = Params.Logo or Params.logo or "rbxassetid://77749228793011",
+    Logo = Params.Logo or Params.logo or "rbxassetid://77749228793011",
+    VersionLogo = Params.VersionLogo or Params.versionLogo or nil,
 
-                IsOpen = true,
-                Pages = { },
-                Items = { },
-                Current = nil,
-            }
+    IsOpen = true,
+    Pages = { },
+    Items = { },
+    Current = nil,
+}
 
             local Items = { } do 
                 if IsMobile then 
@@ -2633,6 +2634,7 @@ local Library = {
                     Name = "\0",
                     Parent = Items["Logo"].Instance
                 })
+
                 
                 Items["Liner"] = Library:Create("Frame", {
                     Name = "\0",
@@ -2654,6 +2656,26 @@ local Library = {
                     BackgroundColor3 = Library.Theme["Inline"]
                 }):AddToTheme({BackgroundColor3 = 'Inline'})
                 
+                if Window.VersionLogo then
+    Items["VersionLogo"] = Library:Create("ImageLabel", {
+        Name = "\0",
+        Parent = Items["Top"].Instance,
+        ImageColor3 = Color3.fromRGB(255, 255, 255),
+        ScaleType = Enum.ScaleType.Fit,
+        AnchorPoint = Vector2.new(0, 0.5),
+        Image = Window.VersionLogo,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 425, 0.5, 0),
+        Size = UDim2.new(0, 45, 0, 45),
+        BorderSizePixel = 0
+    })
+
+    Library:Create("UICorner", {
+        Name = "\0",
+        Parent = Items["VersionLogo"].Instance
+    })
+end
+
                 Library:Create("UICorner", {
                     Name = "\0",
                     Parent = Items["Search"].Instance,
